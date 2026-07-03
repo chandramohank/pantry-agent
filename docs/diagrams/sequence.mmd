@@ -1,0 +1,69 @@
+---
+title: Pantry Agent – Sequence Diagram
+---
+sequenceDiagram
+    actor User
+    participant App as Client App
+    participant Graph as LangGraph
+    participant MM as Memory Store
+    participant LLM as OpenAI GPT-4o
+    participant API as Pantry REST API
+
+    User->>App: "Scan my fridge photo" + image.jpg
+    App->>Graph: invoke(state, config={thread_id, user_id})
+
+    activate Graph
+    Graph->>MM: load_user_memory(user_id)
+    MM-->>Graph: {dietary_prefs, allergies, ...}
+
+    Graph->>LLM: classify_intent(user_message)
+    LLM-->>Graph: {intent: "scan_groceries", domain: "Vision", has_image: true}
+
+    Graph->>LLM: agent_node(messages + tools + system_prompt)
+    LLM-->>Graph: tool_call: extract_ingredients_from_image(image_data=..., auto_save=true)
+
+    Graph->>API: POST /api/ai/vision/extract-save
+    API-->>Graph: {extracted_items: [...], confidence: 0.72, saved: false}
+
+    Graph->>LLM: agent_node(messages including ToolMessage)
+    LLM-->>Graph: "I found 8 ingredients with 72% confidence. Please review."
+
+    Graph->>Graph: validate_output → confidence=0.72 < 0.80 → approval_required=true
+
+    Graph-->>App: interrupt({reason: "Low confidence", items: [...]})
+    deactivate Graph
+
+    App->>User: "Please review these 8 items before saving"
+    User->>App: "Approved – save all"
+    App->>Graph: Command(resume={approved: true})
+
+    activate Graph
+    Graph->>API: POST /api/pantry (for each item)
+    API-->>Graph: 200 OK × 8
+
+    Graph->>LLM: update_memory(conversation_summary)
+    LLM-->>Graph: {preferences_learned: [], pantry_changes: ["added spinach", ...]}
+    Graph->>MM: save_user_memory(user_id, updated_memory)
+
+    Graph-->>App: final state {messages: [...], pantry_items: [...]}
+    deactivate Graph
+
+    App->>User: "✅ Saved 8 ingredients to your pantry!"
+
+    Note over User,API: ── Follow-up turn ──
+
+    User->>App: "What can I cook with these?"
+    App->>Graph: invoke(state, config={thread_id})   ← same thread_id, memory loaded
+
+    activate Graph
+    Graph->>MM: load_user_memory(user_id)
+    Graph->>LLM: classify_intent → domain=Recipes
+    Graph->>LLM: agent_node → tool_call: recommend_recipes()
+    Graph->>API: GET /api/ai/recipes
+    API-->>Graph: {recipes: [{name: "Spinach Omelette", ...}, ...]}
+    Graph->>LLM: agent_node → "Here are 5 recipes you can make right now!"
+    Graph->>Graph: validate_output → no issues → update_memory → END
+    Graph-->>App: {messages: [...], recipes: [...]}
+    deactivate Graph
+
+    App->>User: "Here are 5 recipes you can cook right now! 🍳"

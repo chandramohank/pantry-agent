@@ -1,0 +1,45 @@
+---
+title: Pantry Agent – LangGraph Flow
+---
+flowchart TD
+    START([▶ START]) --> load_memory
+
+    load_memory["📦 load_memory\nLoad long-term user\npreferences & history"]
+
+    load_memory --> classify_intent
+
+    classify_intent["🧠 classify_intent\nLLM · temp=0\nIntent · Domain · Image detection"]
+
+    classify_intent --> agent
+
+    agent["🤖 agent\nChatOpenAI\nbind_tools · ReAct loop\nDynamic system prompt"]
+
+    agent -->|"tool_calls present"| tools
+    agent -->|"no tool calls"| validate_output
+
+    tools["⚙️ tools\nLangGraph ToolNode\nExecutes API calls\nwith retry logic"]
+    tools --> agent
+
+    validate_output["✅ validate_output\nConfidence check\nBulk threshold check\nError detection"]
+
+    validate_output -->|"approval_required=True"| request_approval
+    validate_output -->|"approval_required=False"| update_memory
+
+    request_approval["🛑 request_approval\ninterrupt() — PAUSES\nHuman reviews items\nresumes via Command"]
+
+    request_approval --> update_memory
+
+    update_memory["💾 update_memory\nLLM summarises turn\nMerge to SQLite\nlong-term store"]
+
+    update_memory --> END_NODE([⏹ END])
+
+    %% Styling
+    style START fill:#22c55e,color:#fff,stroke:none
+    style END_NODE fill:#ef4444,color:#fff,stroke:none
+    style request_approval fill:#f59e0b,color:#fff
+    style agent fill:#6366f1,color:#fff
+    style tools fill:#3b82f6,color:#fff
+    style classify_intent fill:#8b5cf6,color:#fff
+    style load_memory fill:#0ea5e9,color:#fff
+    style validate_output fill:#10b981,color:#fff
+    style update_memory fill:#0ea5e9,color:#fff
