@@ -4,6 +4,7 @@ from .human_approval import request_approval, route_after_approval
 from .intent_classifier import classify_intent
 from .memory_loader import load_memory
 from .memory_updater import update_memory
+from .response_composer import compose_response
 from .validator import needs_approval, validate_output
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "request_approval",
     "route_after_approval",
     "update_memory",
+    "compose_response",
 ]

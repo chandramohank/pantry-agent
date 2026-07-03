@@ -69,6 +69,7 @@ from .nodes.human_approval import request_approval, route_after_approval
 from .nodes.intent_classifier import classify_intent
 from .nodes.memory_loader import load_memory
 from .nodes.memory_updater import update_memory
+from .nodes.response_composer import compose_response
 from .nodes.validator import needs_approval, validate_output
 from .observability.tracing import configure_logging, log_agent_run
 from .state import PantryAgentState, default_state
@@ -120,6 +121,7 @@ def create_agent(
     builder.add_node("validate_output", validate_output)
     builder.add_node("request_approval", request_approval)
     builder.add_node("update_memory", update_memory)
+    builder.add_node("compose_response", compose_response)
 
     # ── Edges ─────────────────────────────────────────────────────────────
     # Linear entry path
@@ -148,7 +150,8 @@ def create_agent(
         },
     )
     builder.add_edge("request_approval", "update_memory")
-    builder.add_edge("update_memory", END)
+    builder.add_edge("update_memory", "compose_response")
+    builder.add_edge("compose_response", END)
 
     # ── Compile ───────────────────────────────────────────────────────────
     if checkpointer is None:

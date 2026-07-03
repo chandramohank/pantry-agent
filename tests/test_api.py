@@ -35,7 +35,9 @@ def test_chat_returns_json(monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json() == {
-        "thread_id": "thread-1",
-        "content": "You can make an omelette.",
-    }
+    body = response.json()
+    assert body["thread_id"] == "thread-1"
+    assert body["message"] == "You can make an omelette."
+    assert body["artifacts"] == []
+    assert body["schema_version"] == "1.0"
+    assert "content" not in body

@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from .agent import run_agent
+from .models.schemas import AgentResponseEnvelope
 
 app = FastAPI(title="Pantry Agent API", version="0.1.0")
 
@@ -69,10 +70,24 @@ def _run_chat(request: ChatSSERequest) -> dict[str, Any]:
         uploaded_images=request.uploaded_images,
         app=get_graph_app(),
     )
-    return {
-        "thread_id": request.thread_id,
-        "content": _last_assistant_text(result.get("messages", [])),
-    }
+    message = _last_assistant_text(result.get("messages", []))
+    ui_response = result.get("ui_response") or {}
+    if isinstance(ui_response, dict) and ui_response:
+        ui_response["thread_id"] = request.thread_id
+        ui_response["message"] = ui_response.get("message") or message
+        return ui_response
+
+    envelope = AgentResponseEnvelope(
+        thread_id=request.thread_id,
+        message=message,
+        context={
+            "intent": result.get("intent", ""),
+            "domain": result.get("domain", ""),
+        },
+        trace=result.get("execution_trace", []),
+        errors=result.get("validation_errors", []),
+    )
+    return envelope.model_dump()
 
 
 @app.get("/health")

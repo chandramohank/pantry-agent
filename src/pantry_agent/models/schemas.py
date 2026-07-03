@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -275,3 +275,61 @@ class SustainabilityResponse(BaseModel):
     summary: str
     overall_score: float | None = None
     carbon_footprint_estimate: str | None = None
+
+
+# ── Agent UI contract ────────────────────────────────────────────────────────
+
+class ActionKind(str, Enum):
+    SUBMIT_SELECTION = "submit_selection"
+    OPEN_DETAILS = "open_details"
+    REQUEST_REFRESH = "request_refresh"
+    REQUEST_APPROVAL = "request_approval"
+    CONTINUE = "continue"
+
+
+class UIAction(BaseModel):
+    action_id: str
+    label: str
+    kind: ActionKind
+    target: str = "agent"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+
+
+class UILayout(BaseModel):
+    variant: str | None = None
+    density: str | None = None
+    media_position: str | None = None
+    group_by: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UIArtifact(BaseModel):
+    artifact_id: str
+    type: Literal[
+        "selection_list",
+        "card_collection",
+        "table",
+        "chart",
+        "form",
+        "approval_prompt",
+    ]
+    title: str
+    description: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+    actions: list[UIAction] = Field(default_factory=list)
+    layout: UILayout = Field(default_factory=UILayout)
+    accessibility: dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentResponseEnvelope(BaseModel):
+    schema_version: str = "1.0"
+    thread_id: str
+    message: str
+    artifacts: list[UIArtifact] = Field(default_factory=list)
+    actions: list[UIAction] = Field(default_factory=list)
+    context: dict[str, Any] = Field(default_factory=dict)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
+    approval: dict[str, Any] | None = None
+    errors: list[str] = Field(default_factory=list)

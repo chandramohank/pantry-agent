@@ -11,7 +11,7 @@ def test_default_state_has_all_keys():
         "selected_tool", "tool_outputs", "extracted_items", "pantry_items",
         "recipes", "waste_analysis", "sustainability_data", "validation_errors",
         "human_approval_required", "human_approved", "approval_reason",
-        "execution_trace", "retry_count", "error", "memory",
+        "execution_trace", "retry_count", "error", "ui_response", "memory",
     ]
     for key in required_keys:
         assert key in state, f"Missing key: {key}"
@@ -25,6 +25,7 @@ def test_default_state_values():
     assert state["human_approved"] is None
     assert state["retry_count"] == 0
     assert state["error"] is None
+    assert state["ui_response"] == {}
     assert isinstance(state["memory"], dict)
 
 

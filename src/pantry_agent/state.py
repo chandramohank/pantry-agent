@@ -45,6 +45,7 @@ class PantryAgentState(TypedDict):
     execution_trace: list[dict[str, Any]]
     retry_count: int
     error: str | None
+    ui_response: dict[str, Any]
 
     # ── Memory ───────────────────────────────────────────────────────────────
     # Loaded once at the start of each turn from long-term store.
@@ -73,5 +74,6 @@ def default_state() -> PantryAgentState:
         execution_trace=[],
         retry_count=0,
         error=None,
+        ui_response={},
         memory={},
     )
