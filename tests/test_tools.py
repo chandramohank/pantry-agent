@@ -93,14 +93,39 @@ def test_extract_pantry_items_from_text():
     assert len(result["extracted_items"]) == 2
 
 
-def test_recommend_recipes_returns_recipes(sample_recipes):
+def test_recommend_recipes_returns_recipes(sample_recipes, sample_pantry_items):
     from pantry_agent.tools.recipes import recommend_recipes
 
-    mock_response = {"recipes": sample_recipes, "pantry_coverage_pct": 90.0}
-    with patch("pantry_agent.tools.recipes.safe_api_call", return_value=mock_response):
+    # Mock recipe_search_tool to return sample recipes
+    sample_recipes_with_details = [
+        {
+            **recipe,
+            "title": recipe.get("name"),
+            "url": "https://example.com/recipe1",
+            "image": "https://example.com/image.jpg",
+            "total_time": 10,
+            "calories": 250.0,
+            "protein": 15.0,
+            "cuisine": "Italian",
+        }
+        for recipe in sample_recipes
+    ]
+    
+    mock_search_response = {"recipes": sample_recipes_with_details, "total_found": 1, "query": "recipe recommendation", "execution_time_ms": 100.0}
+    mock_pantry_response = {"items": sample_pantry_items, "total": len(sample_pantry_items)}
+    
+    with (
+        patch("pantry_agent.tools.recipes.recipe_search_tool") as mock_search,
+        patch("pantry_agent.tools.pantry.get_pantry_inventory") as mock_pantry,
+    ):
+        mock_search.invoke.return_value = mock_search_response
+        mock_pantry.invoke.return_value = mock_pantry_response
+        
         result = recommend_recipes.invoke({})
+    
     assert len(result["recipes"]) == 1
     assert result["recipes"][0]["name"] == "Spinach Omelette"
+    assert result["recipes"][0]["pantry_coverage_pct"] == 100.0  # All ingredients available
 
 
 def test_sustainability_insights_tool():

@@ -252,6 +252,95 @@ def _suggest_substitution(ingredient_name: str, pantry_lookup: dict[str, dict[st
     return options[0] if options else None
 
 
+def _build_recommendation_query(cuisine: str | None, meal_type: str | None) -> str:
+    """
+    Build a natural language query from recommendation parameters.
+    Falls back to a generic recommendation query if no specific filters are provided.
+    """
+    parts = []
+    if cuisine:
+        parts.append(f"{cuisine} style")
+    if meal_type:
+        parts.append(meal_type)
+    if parts:
+        query = " ".join(parts) + " recipe idea"
+    else:
+        query = "recipe recommendation"
+    return query
+
+
+def _rank_by_pantry_coverage(
+    recipes: list[dict[str, Any]],
+    pantry_items: list[dict[str, Any]],
+    max_missing_ingredients: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Post-filter recipes by max_missing_ingredients and rank by pantry coverage.
+    Returns recipes sorted by pantry coverage percentage (highest first).
+    """
+    # Build pantry lookup
+    pantry_lookup = {
+        _normalize_ingredient_name(item.get("name", "")): item
+        for item in pantry_items
+        if isinstance(item, dict) and _normalize_ingredient_name(item.get("name", ""))
+    }
+
+    ranked_recipes = []
+    for recipe in recipes:
+        # Skip recipes that don't have ingredient info
+        ingredients = recipe.get("ingredients", [])
+        if not isinstance(ingredients, list):
+            continue
+
+        if not ingredients:
+            # No ingredient details available, include but with 0% coverage
+            recipe["pantry_coverage_pct"] = 0.0
+            recipe["missing_ingredients"] = []
+            recipe["available_ingredients"] = []
+            ranked_recipes.append(recipe)
+            continue
+
+        # Compare ingredients against pantry
+        available_count = 0
+        missing_count = 0
+        missing_list = []
+        available_list = []
+
+        for ingredient in ingredients:
+            ingredient_name = _ingredient_label(ingredient) if isinstance(ingredient, dict) else str(ingredient)
+            if not ingredient_name:
+                continue
+
+            normalized = _normalize_ingredient_name(ingredient_name)
+            is_available = normalized in pantry_lookup or any(
+                normalized in pantry_key or pantry_key in normalized for pantry_key in pantry_lookup
+            )
+
+            if is_available:
+                available_count += 1
+                available_list.append(ingredient_name)
+            else:
+                missing_count += 1
+                missing_list.append(ingredient_name)
+
+        total_ingredients = len(ingredients)
+        coverage_pct = round((available_count / total_ingredients) * 100, 1) if total_ingredients else 0.0
+
+        # Filter by max_missing_ingredients if specified
+        if max_missing_ingredients is not None and missing_count > max_missing_ingredients:
+            continue
+
+        recipe["pantry_coverage_pct"] = coverage_pct
+        recipe["missing_ingredients"] = missing_list
+        recipe["available_ingredients"] = available_list
+        ranked_recipes.append(recipe)
+
+    # Sort by pantry coverage (highest first)
+    ranked_recipes.sort(key=lambda r: r.get("pantry_coverage_pct", 0.0), reverse=True)
+
+    return ranked_recipes
+
+
 @tool(args_schema=RecommendRecipesInput)
 def recommend_recipes(
     cuisine: str | None = None,
@@ -264,9 +353,9 @@ def recommend_recipes(
 
     PURPOSE
     -------
-    Queries the Pantry API for recipe recommendations personalised to the
-    user's available ingredients. Recipes are ranked by pantry coverage
-    (highest coverage first).
+    Searches for recipe recommendations personalised to the user's available
+    ingredients using Azure Search hybrid search. Recipes are ranked by pantry
+    coverage (highest coverage first).
 
     WHEN TO USE
     -----------
@@ -297,31 +386,83 @@ def recommend_recipes(
           "cook_time_minutes": 20,
           "servings": 2,
           "cuisine": "Italian",
-          "tags": ["pasta", "quick"]
+          "tags": ["pasta", "quick"],
+          "pantry_coverage_pct": 85.0,
+          "available_ingredients": [...],
+          "missing_ingredients": [...]
         }
       ],
-      "pantry_coverage_pct": 85.0,
       "message": "Found 8 recipes you can cook now."
     }
 
     DEPENDENCIES
     ------------
-    For best results, call get_pantry_inventory first so the user knows
-    what they have. The API uses the authenticated user's pantry automatically.
+    Requires Azure Search service configured. For best results, call
+    get_pantry_inventory first so the pantry lookup is accurate.
     """
-    params: dict[str, Any] = {}
-    if cuisine:
-        params["cuisine"] = cuisine
-    if max_missing_ingredients is not None:
-        params["max_missing_ingredients"] = max_missing_ingredients
-    if meal_type:
-        params["meal_type"] = meal_type
-    if max_cook_time_minutes is not None:
-        params["max_cook_time_minutes"] = max_cook_time_minutes
+    try:
+        # Build natural language query from filters
+        query = _build_recommendation_query(cuisine, meal_type)
 
-    result = safe_api_call(api_get, "/api/ai/recipes", params or None)
-    logger.info("Recipe recommendations: %d returned", len(result.get("recipes", [])))
-    return result
+        # Build search filters
+        search_filters: dict[str, Any] = {}
+        if max_cook_time_minutes is not None:
+            search_filters["max_time"] = max_cook_time_minutes
+        if cuisine:
+            search_filters["cuisine"] = cuisine
+        if meal_type:
+            search_filters["meal_type"] = meal_type
+
+        # Execute search
+        search_results = recipe_search_tool.invoke({"query": query, "filters": search_filters or None})
+
+        if search_results.get("error"):
+            return {
+                "recipes": [],
+                "message": f"Recipe recommendations unavailable: {search_results.get('error', 'unknown error')}",
+            }
+
+        # Fetch pantry inventory for post-filtering and coverage analysis
+        from .pantry import get_pantry_inventory
+
+        pantry_result = get_pantry_inventory.invoke({})
+        pantry_items = pantry_result.get("items", []) if isinstance(pantry_result, dict) else []
+
+        # Get recipes from search results and rank by pantry coverage
+        recipes_raw = search_results.get("recipes", [])
+        ranked_recipes = _rank_by_pantry_coverage(recipes_raw, pantry_items, max_missing_ingredients)
+
+        # Generate summary message
+        if ranked_recipes:
+            cookable_now = sum(1 for r in ranked_recipes if r.get("pantry_coverage_pct", 0.0) == 100.0)
+            message = f"Found {len(ranked_recipes)} recipe recommendations"
+            if cookable_now > 0:
+                message += f" ({cookable_now} you can cook right now)"
+            message += "."
+        else:
+            message = "No recipes found matching your criteria and pantry."
+
+        result = {
+            "recipes": ranked_recipes,
+            "message": message,
+        }
+
+        logger.info(
+            "Recipe recommendations: query=%r, cuisine=%r, meal_type=%r, found=%d",
+            query,
+            cuisine,
+            meal_type,
+            len(ranked_recipes),
+        )
+        return result
+
+    except Exception as e:
+        logger.warning("Recipe recommendations failed: %s", e)
+        return {
+            "recipes": [],
+            "message": f"Recipe recommendations failed: {str(e)}",
+            "error": str(e),
+        }
 
 
 @tool(args_schema=RecipeDetailsInput)
@@ -508,6 +649,10 @@ def _build_odata_filter(filters: dict) -> str:
         conditions.append(f"author eq '{author}'")
     if yields := filters.get("yields"):
         conditions.append(f"yields eq '{yields}'")
+    if cuisine := filters.get("cuisine"):
+        conditions.append(f"cuisine eq '{cuisine}'")
+    if meal_type := filters.get("meal_type"):
+        conditions.append(f"meal_type eq '{meal_type}'")
 
     # Exclude ingredients (search.in function for array field)
     if exclude_ingredients := filters.get("exclude_ingredients"):
