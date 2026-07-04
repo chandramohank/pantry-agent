@@ -243,6 +243,36 @@ def test_validate_output_collects_tool_data_after_final_ai():
     assert result["tool_outputs"][0]["tool_name"] == "recommend_recipes"
 
 
+def test_validate_output_does_not_store_failed_recipe_details():
+    from langchain_core.messages import ToolMessage
+
+    from pantry_agent.nodes.validator import validate_output
+
+    state = default_state()
+    state["messages"] = [
+        HumanMessage(content="Show me the selected recipe"),
+        AIMessage(content="", tool_calls=[{"name": "get_recipe_details", "args": {}, "id": "tc1"}]),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "error": True,
+                    "message": "Recipe details are unavailable for the selected recipe.",
+                }
+            ),
+            tool_call_id="tc1",
+            name="get_recipe_details",
+        ),
+        AIMessage(content="I couldn't load that recipe just now."),
+    ]
+
+    result = validate_output(state)
+
+    assert "recipe_details" not in result
+    assert result["validation_errors"] == [
+        "get_recipe_details: Recipe details are unavailable for the selected recipe."
+    ]
+
+
 def test_compose_response_summary_message_with_structured_payload():
     from pantry_agent.nodes.response_composer import compose_response
 
@@ -269,3 +299,57 @@ def test_compose_response_summary_message_with_structured_payload():
     assert ui_response["message"] == "Prepared 1 recipe recommendation(s)."
     assert len(ui_response["payload"]["recipes"]) == 1
     assert "Instructions:" not in ui_response["message"]
+
+
+def test_compose_response_ignores_failed_recipe_detail_payload():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["messages"] = [AIMessage(content="I couldn't load that recipe just now.")]
+    state["recipe_details"] = {
+        "error": True,
+        "message": "Recipe details are unavailable for the selected recipe.",
+    }
+    state["validation_errors"] = [
+        "get_recipe_details: Recipe details are unavailable for the selected recipe."
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "I couldn't load that recipe just now."
+    assert "recipe_details" not in ui_response["payload"]
+    assert ui_response["artifacts"] == []
+
+
+def test_compose_response_normalizes_recipe_search_results_into_artifacts():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["messages"] = [AIMessage(content="Here are a few tomato recipes.")]
+    state["recipes"] = [
+        {
+            "id": "recipe-1",
+            "title": "Tomato Omelette",
+            "url": "https://example.com/tomato-omelette",
+            "image": "https://example.com/tomato-omelette.jpg",
+            "total_time": 10,
+            "calories": 220.5,
+            "protein": 12.0,
+            "hybrid_score": 0.91,
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "Prepared 1 recipe recommendation(s)."
+    card = ui_response["artifacts"][0]["data"]["cards"][0]
+    assert card["id"] == "recipe-1"
+    assert card["name"] == "Tomato Omelette"
+    assert card["image_url"] == "https://example.com/tomato-omelette.jpg"
+    assert card["prep_time_minutes"] == 10
+    assert card["calories"] == 220.5
+    assert card["metadata"]["url"] == "https://example.com/tomato-omelette"
+    assert card["metadata"]["protein"] == 12.0
+    assert card["metadata"]["hybrid_score"] == 0.91

@@ -208,6 +208,7 @@ class RecipeRecommendationResponse(BaseModel):
 
 class RecipeSearchResult(BaseModel):
     """Single recipe result from hybrid search."""
+    id: str | None = None
     title: str
     url: str
     image: str | None = None
@@ -235,6 +236,18 @@ class RecipeSearchResponse(BaseModel):
     total_found: int | None = None
     query: str
     execution_time_ms: float | None = None
+
+
+class RecipeDetailResponse(BaseModel):
+    """Detailed recipe payload with pantry-aware analysis."""
+    recipe: Recipe
+    pantry_coverage_pct: float | None = None
+    available_ingredients: list[str] = Field(default_factory=list)
+    missing_ingredients: list[str] = Field(default_factory=list)
+    substitutions: dict[str, str] = Field(default_factory=dict)
+    pantry_matches: list[str] = Field(default_factory=list)
+    shopping_list: list[dict[str, Any]] = Field(default_factory=list)
+    message: str | None = None
 
 
 # ── Waste analysis ────────────────────────────────────────────────────────────
@@ -343,6 +356,7 @@ class UIArtifact(BaseModel):
         "table",
         "chart",
         "form",
+        "detail_view",
         "approval_prompt",
     ]
     title: str

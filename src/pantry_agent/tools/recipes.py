@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from functools import lru_cache
 from typing import Any
@@ -55,6 +56,202 @@ class RecommendRecipesInput(BaseModel):
     )
 
 
+class RecipeDetailsInput(BaseModel):
+    recipe_id: str | None = Field(default=None, description="Stable recipe identifier, if available.")
+    recipe_name: str | None = Field(default=None, description="Recipe name to resolve when no ID is available.")
+    recipe_url: str | None = Field(default=None, description="Canonical recipe URL when selecting from search results.")
+    id: str | None = Field(
+        default=None,
+        description="Alias for recipe_id for callers that send generic 'id'.",
+    )
+    name: str | None = Field(
+        default=None,
+        description="Alias for recipe_name so plain recipe name inputs are accepted.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="Alias for recipe_url for callers that send generic 'url'.",
+    )
+    recipe: dict[str, Any] | str | None = Field(
+        default=None,
+        description=(
+            "Optional recipe selection payload from a prior recommendation/search result, "
+            "or a plain recipe name string."
+        ),
+    )
+    include_pantry_analysis: bool = Field(
+        default=True,
+        description="Compare recipe ingredients against the current pantry and return missing items plus substitutions.",
+    )
+
+
+_DEFAULT_SUBSTITUTIONS: dict[str, list[str]] = {
+    "butter": ["olive oil", "ghee", "coconut oil"],
+    "milk": ["oat milk", "soy milk", "water"],
+    "heavy cream": ["coconut cream", "evaporated milk"],
+    "eggs": ["flaxseed meal", "chia seed gel", "applesauce"],
+    "flour": ["oat flour", "almond flour", "cornstarch"],
+    "sugar": ["honey", "maple syrup", "date syrup"],
+    "spinach": ["kale", "swiss chard", "mixed greens"],
+    "tomato": ["tomato paste", "canned tomatoes", "red pepper"],
+    "chicken breast": ["tofu", "chickpeas", "turkey breast"],
+    "parmesan": ["pecorino romano", "nutritional yeast"],
+    "yogurt": ["sour cream", "coconut yogurt", "Greek yogurt"],
+}
+
+
+def _normalize_ingredient_name(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    words: list[str] = []
+    for word in normalized.split():
+        if len(word) > 3 and word.endswith("ies"):
+            words.append(word[:-3] + "y")
+        elif len(word) > 3 and word.endswith("es") and not word.endswith("ses"):
+            words.append(word[:-2])
+        elif len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+            words.append(word[:-1])
+        else:
+            words.append(word)
+    return " ".join(words)
+
+
+def _ingredient_label(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("name", "ingredient", "title", "label"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _recipe_title(recipe: dict[str, Any]) -> str:
+    return str(recipe.get("name") or recipe.get("title") or "").strip()
+
+
+def _recipe_identifier(recipe: dict[str, Any]) -> str | None:
+    value = recipe.get("id") or recipe.get("recipe_id")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _recipe_url(recipe: dict[str, Any]) -> str | None:
+    value = recipe.get("url") or recipe.get("recipe_url") or recipe.get("source_url")
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _recipe_has_detail_fields(recipe: dict[str, Any]) -> bool:
+    return bool(recipe.get("ingredients") or recipe.get("instructions") or recipe.get("description"))
+
+
+def _recipe_has_summary_fields(recipe: dict[str, Any]) -> bool:
+    return bool(_recipe_title(recipe) or _recipe_url(recipe) or _recipe_identifier(recipe))
+
+
+def _normalize_recipe_summary(recipe: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(recipe)
+    title = _recipe_title(normalized)
+    if title and not normalized.get("name"):
+        normalized["name"] = title
+    if "title" in normalized and normalized.get("name") == normalized.get("title"):
+        normalized.pop("title", None)
+    return normalized
+
+
+def _match_recipe_candidate(candidate: dict[str, Any], recipe_id: str | None, recipe_name: str | None, recipe_url: str | None) -> bool:
+    if recipe_id and str(candidate.get("id")) == str(recipe_id):
+        return True
+    if recipe_url and candidate.get("url") == recipe_url:
+        return True
+    if recipe_name and _normalize_ingredient_name(_recipe_title(candidate)) == _normalize_ingredient_name(recipe_name):
+        return True
+    return False
+
+
+def _coerce_recipe_payload(payload: Any, recipe_id: str | None, recipe_name: str | None, recipe_url: str | None) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        if isinstance(payload.get("recipe"), dict):
+            candidate = payload["recipe"]
+            if _match_recipe_candidate(candidate, recipe_id, recipe_name, recipe_url):
+                return candidate
+        if isinstance(payload.get("recipes"), list):
+            payload = payload["recipes"]
+        elif _recipe_has_detail_fields(payload):
+            return payload
+    if isinstance(payload, list):
+        for candidate in payload:
+            if isinstance(candidate, dict) and _match_recipe_candidate(candidate, recipe_id, recipe_name, recipe_url):
+                return candidate
+        for candidate in payload:
+            if isinstance(candidate, dict) and _recipe_has_detail_fields(candidate):
+                return candidate
+    return None
+
+
+def _fetch_recipe_details(recipe_id: str | None, recipe_name: str | None, recipe_url: str | None) -> dict[str, Any] | None:
+    candidates: list[tuple[str, dict[str, Any] | None]] = []
+    if recipe_id:
+        candidates.extend(
+            [
+                ("/api/ai/recipes", {"id": recipe_id}),
+            ]
+        )
+    if recipe_name:
+        candidates.extend(
+            [
+                ("/api/ai/recipes", {"name": recipe_name}),
+            ]
+        )
+    if recipe_url:
+        candidates.extend(
+            [
+                ("/api/ai/recipes", {"url": recipe_url}),
+            ]
+        )
+
+    for path, params in candidates:
+        result = safe_api_call(api_get, path, params or None)
+        if isinstance(result, dict) and result.get("error"):
+            continue
+        recipe = _coerce_recipe_payload(result, recipe_id, recipe_name, recipe_url)
+        if recipe:
+            return recipe
+    return None
+
+
+def _extract_recipe_ingredients(recipe: dict[str, Any]) -> list[dict[str, Any]]:
+    ingredients = recipe.get("ingredients", [])
+    if not isinstance(ingredients, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in ingredients:
+        label = _ingredient_label(item)
+        if not label:
+            continue
+        quantity = item.get("quantity") if isinstance(item, dict) else None
+        unit = item.get("unit") if isinstance(item, dict) else None
+        normalized.append({"name": label, "quantity": quantity, "unit": unit, "raw": item})
+    return normalized
+
+
+def _suggest_substitution(ingredient_name: str, pantry_lookup: dict[str, dict[str, Any]]) -> str | None:
+    normalized = _normalize_ingredient_name(ingredient_name)
+    options = _DEFAULT_SUBSTITUTIONS.get(normalized, [])
+    for option in options:
+        if _normalize_ingredient_name(option) in pantry_lookup:
+            return option
+    return options[0] if options else None
+
+
 @tool(args_schema=RecommendRecipesInput)
 def recommend_recipes(
     cuisine: str | None = None,
@@ -83,7 +280,7 @@ def recommend_recipes(
 
     WHEN NOT TO USE
     ---------------
-    - For detailed cooking instructions → use cooking_copilot
+    - For detailed cooking instructions or a selected recipe → use get_recipe_details
     - For weekly meal planning → use create_diet_plan
     - For waste reduction (using expiring items) → use recommend_waste_reduction
 
@@ -125,6 +322,150 @@ def recommend_recipes(
     result = safe_api_call(api_get, "/api/ai/recipes", params or None)
     logger.info("Recipe recommendations: %d returned", len(result.get("recipes", [])))
     return result
+
+
+@tool(args_schema=RecipeDetailsInput)
+def get_recipe_details(
+    recipe_id: str | None = None,
+    recipe_name: str | None = None,
+    recipe_url: str | None = None,
+    id: str | None = None,
+    name: str | None = None,
+    url: str | None = None,
+    recipe: dict[str, Any] | str | None = None,
+    include_pantry_analysis: bool = True,
+) -> dict[str, Any]:
+    """
+    Return a selected recipe plus pantry-aware missing ingredient analysis.
+
+    PURPOSE
+    -------
+    Fetches or reuses a recipe payload and compares its ingredients against the
+    user's current pantry so the caller can see what is already available,
+    what is missing, and which substitutions are reasonable.
+    """
+    resolved_recipe_id = recipe_id or id
+    resolved_recipe_name = recipe_name or name
+    resolved_recipe_url = recipe_url or url
+
+    # Accept direct recipe-name inputs when callers pass recipe as plain text.
+    if isinstance(recipe, str):
+        if recipe.strip() and not resolved_recipe_name:
+            resolved_recipe_name = recipe.strip()
+        selected_recipe: dict[str, Any] = {}
+    else:
+        selected_recipe = dict(recipe or {})
+        if selected_recipe:
+            selected_recipe = _normalize_recipe_summary(selected_recipe)
+
+    if not resolved_recipe_id:
+        resolved_recipe_id = _recipe_identifier(selected_recipe)
+    if not resolved_recipe_url:
+        resolved_recipe_url = _recipe_url(selected_recipe)
+
+    if not resolved_recipe_name:
+        selected_title = _recipe_title(selected_recipe)
+        if selected_title:
+            resolved_recipe_name = selected_title
+
+    should_fetch_recipe_details = not selected_recipe or not _recipe_has_summary_fields(selected_recipe)
+    if not _recipe_has_detail_fields(selected_recipe) and should_fetch_recipe_details:
+        fetched_recipe = _fetch_recipe_details(
+            resolved_recipe_id,
+            resolved_recipe_name,
+            resolved_recipe_url,
+        )
+        if fetched_recipe:
+            selected_recipe = {**selected_recipe, **fetched_recipe}
+
+    if not selected_recipe:
+        return {
+            "error": True,
+            "message": "Recipe details are unavailable for the selected recipe.",
+        }
+
+    selected_recipe = _normalize_recipe_summary(selected_recipe)
+
+    recipe_title = _recipe_title(selected_recipe)
+    response: dict[str, Any] = {"recipe": selected_recipe}
+
+    if not include_pantry_analysis:
+        response["message"] = f"Loaded details for {recipe_title or 'selected recipe'}."
+        return response
+
+    from .pantry import get_pantry_inventory
+
+    pantry_result = get_pantry_inventory.invoke({})
+    pantry_items = pantry_result.get("items", []) if isinstance(pantry_result, dict) else []
+    pantry_lookup = {
+        _normalize_ingredient_name(item.get("name", "")): item
+        for item in pantry_items
+        if isinstance(item, dict) and _normalize_ingredient_name(item.get("name", ""))
+    }
+
+    ingredient_rows = _extract_recipe_ingredients(selected_recipe)
+    available_ingredients: list[str] = []
+    missing_ingredients: list[str] = []
+    pantry_matches: list[str] = []
+    substitutions: dict[str, str] = {}
+    shopping_list: list[dict[str, Any]] = []
+
+    for ingredient in ingredient_rows:
+        ingredient_name = ingredient["name"]
+        normalized = _normalize_ingredient_name(ingredient_name)
+        is_available = normalized in pantry_lookup or any(
+            normalized in pantry_key or pantry_key in normalized for pantry_key in pantry_lookup
+        )
+
+        if is_available:
+            available_ingredients.append(ingredient_name)
+            pantry_matches.append(ingredient_name)
+            continue
+
+        missing_ingredients.append(ingredient_name)
+        shopping_list.append(
+            {
+                "name": ingredient_name,
+                "quantity": ingredient.get("quantity"),
+                "unit": ingredient.get("unit"),
+            }
+        )
+        if substitution := _suggest_substitution(ingredient_name, pantry_lookup):
+            substitutions[ingredient_name] = substitution
+
+    total_ingredients = len(ingredient_rows)
+    pantry_coverage_pct = round((len(available_ingredients) / total_ingredients) * 100, 1) if total_ingredients else None
+
+    if ingredient_rows:
+        message = (
+            f"Recipe details prepared for {recipe_title or 'selected recipe'}. "
+            f"{len(available_ingredients)} ingredient(s) on hand, {len(missing_ingredients)} missing."
+        )
+    else:
+        message = (
+            f"Loaded recipe summary for {recipe_title or 'selected recipe'}. "
+            "Full ingredient details are unavailable from the current source."
+        )
+
+    response.update(
+        {
+            "pantry_coverage_pct": pantry_coverage_pct,
+            "available_ingredients": available_ingredients,
+            "missing_ingredients": missing_ingredients,
+            "substitutions": substitutions,
+            "pantry_matches": pantry_matches,
+            "shopping_list": shopping_list,
+            "message": message,
+        }
+    )
+
+    logger.info(
+        "Recipe details resolved: recipe=%r, pantry_coverage=%s%%, missing=%d",
+        recipe_title,
+        pantry_coverage_pct,
+        len(missing_ingredients),
+    )
+    return response
 
 
 # ── Azure Search Hybrid Recipe Search ────────────────────────────────────────
@@ -352,6 +693,7 @@ def recipe_search_tool(query: str, filters: dict | None = None) -> dict[str, Any
             hybrid_score = min(result["@search.score"] / 100.0, 1.0) if result.get("@search.score") else 0.0
 
             recipe = RecipeSearchResult(
+                id=result.get("id"),
                 title=result.get("title", "Unknown"),
                 url=result.get("url", ""),
                 image=result.get("image"),

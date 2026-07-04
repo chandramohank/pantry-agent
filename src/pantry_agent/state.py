@@ -32,6 +32,7 @@ class PantryAgentState(TypedDict):
     extracted_items: list[dict[str, Any]]      # items parsed by vision / NLP
     pantry_items: list[dict[str, Any]]          # current pantry inventory
     recipes: list[dict[str, Any]]               # recommended recipes
+    recipe_details: dict[str, Any]              # selected recipe with pantry analysis
     waste_analysis: list[dict[str, Any]]        # waste-risk analysis rows
     sustainability_data: dict[str, Any]         # sustainability insights
 
@@ -65,6 +66,7 @@ def default_state() -> PantryAgentState:
         extracted_items=[],
         pantry_items=[],
         recipes=[],
+        recipe_details={},
         waste_analysis=[],
         sustainability_data={},
         validation_errors=[],

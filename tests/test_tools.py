@@ -161,6 +161,18 @@ def test_recipe_search_tool_in_general_domain():
     assert "recipe_search_tool" in general_tools, "recipe_search_tool not in General domain"
 
 
+def test_get_recipe_details_in_registry():
+    """Verify get_recipe_details is registered in Recipes and General domains."""
+    from pantry_agent.tools.registry import DOMAIN_TOOLS, TOOL_BY_NAME
+
+    recipe_tools = {t.name for t in DOMAIN_TOOLS["Recipes"]}
+    general_tools = {t.name for t in DOMAIN_TOOLS["General"]}
+
+    assert "get_recipe_details" in recipe_tools, "get_recipe_details not in Recipes domain"
+    assert "get_recipe_details" in general_tools, "get_recipe_details not in General domain"
+    assert "get_recipe_details" in TOOL_BY_NAME, "get_recipe_details not in TOOL_BY_NAME"
+
+
 def test_recipe_search_tool_has_correct_schema():
     """Verify recipe_search_tool has correct input schema."""
     from pantry_agent.tools.recipes import recipe_search_tool
@@ -169,6 +181,17 @@ def test_recipe_search_tool_has_correct_schema():
     assert recipe_search_tool.args_schema is RecipeSearchInput
     assert "query" in recipe_search_tool.args_schema.model_fields
     assert "filters" in recipe_search_tool.args_schema.model_fields
+
+
+def test_get_recipe_details_has_correct_schema():
+    """Verify get_recipe_details has correct input schema."""
+    from pantry_agent.models.schemas import RecipeDetailResponse
+    from pantry_agent.tools.recipes import RecipeDetailsInput, get_recipe_details
+
+    assert get_recipe_details.args_schema is RecipeDetailsInput
+    assert "recipe" in get_recipe_details.args_schema.model_fields
+    assert "include_pantry_analysis" in get_recipe_details.args_schema.model_fields
+    assert RecipeDetailResponse.model_fields["recipe"].annotation is not None
 
 
 def test_recipe_search_tool_missing_azure_config():
@@ -266,6 +289,7 @@ def test_recipe_search_tool_successful_search():
     mock_search_results = [
         {
             "@search.score": 0.92,
+            "id": "beef-stew-1",
             "title": "Classic Beef Stew",
             "url": "https://example.com/beef-stew",
             "image": "https://example.com/images/beef-stew.jpg",
@@ -304,6 +328,7 @@ def test_recipe_search_tool_successful_search():
 
         assert "recipes" in result
         assert len(result["recipes"]) == 2
+        assert result["recipes"][0]["id"] == "beef-stew-1"
         assert result["recipes"][0]["title"] == "Classic Beef Stew"
         assert result["recipes"][0]["hybrid_score"] <= 1.0
         assert result["query"] == "hearty beef stew"
@@ -455,6 +480,176 @@ def test_recipe_search_tool_falls_back_when_embedding_fails():
         assert result["recipes"][0]["title"] == "Quick Vegan Pasta"
         search_kwargs = mock_search_client.search.call_args.kwargs
         assert "vectors" not in search_kwargs
+
+
+def test_get_recipe_details_uses_pantry_analysis(sample_pantry_items):
+    """Recipe details should compare ingredients against pantry items and surface substitutions."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    mock_recipe = {
+        "id": "r2",
+        "name": "Creamy Spinach Pasta",
+        "description": "A simple pasta with a creamy sauce.",
+        "ingredients": [
+            {"name": "eggs", "quantity": 3, "unit": "pieces"},
+            {"name": "spinach", "quantity": 100, "unit": "g"},
+            {"name": "parmesan", "quantity": 1, "unit": "cup"},
+        ],
+        "instructions": ["Boil pasta", "Mix sauce", "Serve warm"],
+        "url": "https://example.com/creamy-spinach-pasta",
+    }
+    pantry_with_substitute = sample_pantry_items + [
+        {
+            "id": "5",
+            "name": "nutritional yeast",
+            "quantity": 1.0,
+            "unit": "cup",
+            "category": "condiments",
+        }
+    ]
+
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value={"items": pantry_with_substitute, "total": len(pantry_with_substitute)}):
+        result = get_recipe_details.invoke({"recipe": mock_recipe})
+
+    assert result["recipe"]["name"] == "Creamy Spinach Pasta"
+    assert "parmesan" in result["missing_ingredients"]
+    assert result["substitutions"]["parmesan"] == "nutritional yeast"
+    assert result["pantry_coverage_pct"] == 66.7
+    assert "eggs" in result["available_ingredients"]
+    assert "spinach" in result["available_ingredients"]
+
+
+def test_get_recipe_details_output_schema_compliance(sample_pantry_items):
+    """Recipe details output should satisfy the RecipeDetailResponse schema."""
+    from pantry_agent.models.schemas import RecipeDetailResponse
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    recipe = {
+        "id": "r1",
+        "name": "Spinach Omelette",
+        "description": "Quick and healthy breakfast",
+        "ingredients": [{"name": "eggs", "quantity": 3, "unit": "pieces"}, {"name": "spinach", "quantity": 50, "unit": "g"}],
+        "instructions": ["Beat eggs", "Add spinach", "Cook in pan"],
+    }
+
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value={"items": sample_pantry_items, "total": len(sample_pantry_items)}):
+        result = get_recipe_details.invoke({"recipe": recipe})
+
+    response = RecipeDetailResponse(**result)
+    assert response.recipe.name == "Spinach Omelette"
+    assert response.pantry_coverage_pct == 100.0
+    assert response.missing_ingredients == []
+
+
+def test_get_recipe_details_accepts_plain_recipe_name_string():
+    """Plain text recipe names should resolve through the details fetch path."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    fetched = {
+        "id": "r3",
+        "name": "Tomato Soup",
+        "description": "Simple tomato soup.",
+        "ingredients": [{"name": "tomato", "quantity": 4, "unit": "pieces"}],
+        "instructions": ["Simmer and blend."],
+    }
+
+    with patch("pantry_agent.tools.recipes.safe_api_call", return_value={"recipe": fetched}), patch(
+        "pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}
+    ):
+        result = get_recipe_details.invoke({"recipe": "Tomato Soup"})
+
+    assert result["recipe"]["name"] == "Tomato Soup"
+    assert result["missing_ingredients"] == ["tomato"]
+
+
+def test_get_recipe_details_accepts_alias_keys_name_id_url():
+    """Alias keys should map to recipe_name/recipe_id/recipe_url resolution."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    fetched = {
+        "id": "r4",
+        "name": "Garlic Bread",
+        "description": "Crispy garlic bread.",
+        "ingredients": [{"name": "bread", "quantity": 1, "unit": "loaf"}],
+        "instructions": ["Bake until golden."],
+        "url": "https://example.com/garlic-bread",
+    }
+
+    with patch("pantry_agent.tools.recipes.safe_api_call", return_value={"recipe": fetched}), patch(
+        "pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}
+    ):
+        result = get_recipe_details.invoke({"name": "Garlic Bread", "id": "r4", "url": "https://example.com/garlic-bread"})
+
+    assert result["recipe"]["id"] == "r4"
+    assert result["recipe"]["name"] == "Garlic Bread"
+
+
+def test_get_recipe_details_uses_selected_recipe_summary_without_backend_fetch():
+    """Search-result selections should return a summary without hitting unsupported backend detail routes."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    selected_recipe = {
+        "id": "r4",
+        "title": "Garlic Bread",
+        "url": "https://example.com/garlic-bread",
+    }
+
+    with patch("pantry_agent.tools.recipes.safe_api_call") as mock_safe, patch(
+        "pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}
+    ):
+        result = get_recipe_details.invoke({"recipe": selected_recipe})
+
+    assert result["recipe"]["id"] == "r4"
+    assert result["recipe"]["name"] == "Garlic Bread"
+    assert result["missing_ingredients"] == []
+    assert result["pantry_coverage_pct"] is None
+    assert "Full ingredient details are unavailable" in result["message"]
+    mock_safe.assert_not_called()
+
+
+def test_get_recipe_details_uses_collection_endpoint_for_id_lookup():
+    """ID-based lookups should use the supported collection endpoint instead of a dead detail route."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    fetched = {
+        "id": "r4",
+        "name": "Garlic Bread",
+        "description": "Crispy garlic bread.",
+        "ingredients": [{"name": "bread", "quantity": 1, "unit": "loaf"}],
+        "instructions": ["Bake until golden."],
+        "url": "https://example.com/garlic-bread",
+    }
+
+    with patch("pantry_agent.tools.recipes.safe_api_call", return_value={"recipe": fetched}) as mock_safe, patch(
+        "pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}
+    ):
+        result = get_recipe_details.invoke({"id": "r4"})
+
+    assert result["recipe"]["id"] == "r4"
+    first_call_args = mock_safe.call_args_list[0].args
+    assert first_call_args[1] == "/api/ai/recipes"
+    assert first_call_args[2] == {"id": "r4"}
+
+
+def test_get_recipe_details_returns_summary_when_only_search_hit_is_available():
+    """Summary-only search results should degrade gracefully without a validation error."""
+    from pantry_agent.tools.recipes import get_recipe_details
+
+    selected_recipe = {
+        "title": "La Madeleine Tomato Basil Soup",
+        "url": "https://example.com/tomato-basil-soup",
+        "image": "https://example.com/soup.jpg",
+        "total_time": 40,
+    }
+
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}):
+        result = get_recipe_details.invoke({"recipe": selected_recipe})
+
+    assert result["recipe"]["name"] == "La Madeleine Tomato Basil Soup"
+    assert result["missing_ingredients"] == []
+    assert result["available_ingredients"] == []
+    assert result["pantry_coverage_pct"] is None
+    assert "Full ingredient details are unavailable" in result["message"]
 
 
 def test_cooking_copilot_sends_recipe_name_field():

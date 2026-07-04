@@ -47,6 +47,14 @@ def _last_assistant_text(messages: list[Any]) -> str:
     return ""
 
 
+def _has_recipe_details_payload(payload: Any) -> bool:
+    return bool(
+        isinstance(payload, dict)
+        and isinstance(payload.get("recipe"), dict)
+        and payload.get("recipe")
+    )
+
+
 def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback: str) -> str:
     """Build a concise UI summary when structured payload is available."""
     if not payload:
@@ -61,6 +69,12 @@ def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback:
     recipes = payload.get("recipes")
     if isinstance(recipes, list):
         parts.append(f"Prepared {len(recipes)} recipe recommendation(s).")
+
+    recipe_details = payload.get("recipe_details")
+    if _has_recipe_details_payload(recipe_details):
+        recipe = recipe_details.get("recipe", {})
+        recipe_name = recipe.get("name") or recipe.get("title") or "selected recipe"
+        parts.append(f"Prepared details for {recipe_name}.")
 
     pantry_items = payload.get("pantry_items")
     if isinstance(pantry_items, list):
@@ -128,26 +142,29 @@ def _selection_list_artifact(items: list[dict[str, Any]]) -> UIArtifact:
     )
 
 
+def _recipe_card_data(recipe: dict[str, Any], index: int) -> dict[str, Any]:
+    return {
+        "id": recipe.get("id") or f"recipe-{index}",
+        "image_url": recipe.get("image_url") or recipe.get("image"),
+        "name": recipe.get("name") or recipe.get("title"),
+        "prep_time_minutes": recipe.get("prep_time_minutes") or recipe.get("total_time"),
+        "calories": recipe.get("calories"),
+        "difficulty": recipe.get("difficulty"),
+        "rating": recipe.get("rating"),
+        "metadata": {
+            "cook_time_minutes": recipe.get("cook_time_minutes"),
+            "servings": recipe.get("servings"),
+            "cuisine": recipe.get("cuisine"),
+            "tags": recipe.get("tags", []),
+            "url": recipe.get("url"),
+            "protein": recipe.get("protein"),
+            "hybrid_score": recipe.get("hybrid_score"),
+        },
+    }
+
+
 def _recipe_cards_artifact(recipes: list[dict[str, Any]]) -> UIArtifact:
-    cards = []
-    for idx, recipe in enumerate(recipes):
-        cards.append(
-            {
-                "id": recipe.get("id") or f"recipe-{idx}",
-                "image_url": recipe.get("image_url"),
-                "name": recipe.get("name"),
-                "prep_time_minutes": recipe.get("prep_time_minutes"),
-                "calories": recipe.get("calories"),
-                "difficulty": recipe.get("difficulty"),
-                "rating": recipe.get("rating"),
-                "metadata": {
-                    "cook_time_minutes": recipe.get("cook_time_minutes"),
-                    "servings": recipe.get("servings"),
-                    "cuisine": recipe.get("cuisine"),
-                    "tags": recipe.get("tags", []),
-                },
-            }
-        )
+    cards = [_recipe_card_data(recipe, idx) for idx, recipe in enumerate(recipes)]
 
     return UIArtifact(
         artifact_id="recipe-recommendations",
@@ -169,6 +186,44 @@ def _recipe_cards_artifact(recipes: list[dict[str, Any]]) -> UIArtifact:
             media_position="left",
         ),
         accessibility={"role": "list", "aria_label": "Recipe recommendations"},
+        meta={"domain": "Recipes"},
+    )
+
+
+def _recipe_details_artifact(recipe_details: dict[str, Any]) -> UIArtifact:
+    recipe = recipe_details.get("recipe", {}) if isinstance(recipe_details, dict) else {}
+    analysis = {
+        "pantry_coverage_pct": recipe_details.get("pantry_coverage_pct"),
+        "available_ingredients": recipe_details.get("available_ingredients", []),
+        "missing_ingredients": recipe_details.get("missing_ingredients", []),
+        "substitutions": recipe_details.get("substitutions", {}),
+        "pantry_matches": recipe_details.get("pantry_matches", []),
+        "shopping_list": recipe_details.get("shopping_list", []),
+        "message": recipe_details.get("message"),
+    }
+
+    recipe_name = recipe.get("name") or recipe.get("title") or "Recipe details"
+    actions: list[UIAction] = []
+    if recipe.get("url"):
+        actions.append(
+            UIAction(
+                action_id="open-recipe-source",
+                label="Open Recipe",
+                kind=ActionKind.OPEN_DETAILS,
+                payload={"url": recipe.get("url"), "recipe_id": recipe.get("id")},
+                requires_confirmation=False,
+            )
+        )
+
+    return UIArtifact(
+        artifact_id="recipe-details",
+        type="detail_view",
+        title=recipe_name,
+        description=recipe.get("description") or analysis.get("message"),
+        data={"recipe": recipe, "analysis": analysis},
+        actions=actions,
+        layout=UILayout(variant="detail", density="comfortable"),
+        accessibility={"role": "article", "aria_label": f"Recipe details for {recipe_name}"},
         meta={"domain": "Recipes"},
     )
 
@@ -239,6 +294,10 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
     if recipes:
         artifacts.append(_recipe_cards_artifact(recipes))
 
+    recipe_details = state.get("recipe_details", {})
+    if _has_recipe_details_payload(recipe_details):
+        artifacts.append(_recipe_details_artifact(recipe_details))
+
     pantry_items = state.get("pantry_items", [])
     if pantry_items:
         artifacts.append(_pantry_table_artifact(pantry_items))
@@ -261,6 +320,8 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
         payload["extracted_items"] = extracted_items
     if recipes:
         payload["recipes"] = recipes
+    if _has_recipe_details_payload(state.get("recipe_details")):
+        payload["recipe_details"] = state.get("recipe_details", {})
     if pantry_items:
         payload["pantry_items"] = pantry_items
     if state.get("waste_analysis"):

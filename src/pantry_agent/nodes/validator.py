@@ -32,6 +32,14 @@ _WRITE_TOOLS = {
 }
 
 
+def _has_recipe_details_payload(data: Any) -> bool:
+    return bool(
+        isinstance(data, dict)
+        and isinstance(data.get("recipe"), dict)
+        and data.get("recipe")
+    )
+
+
 def validate_output(state: PantryAgentState) -> dict[str, Any]:
     """
     Validate recent tool outputs and flag high-risk operations for human review.
@@ -146,6 +154,10 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
             updates["pantry_items"] = data["items"]
         if "recipes" in data:
             updates["recipes"] = data["recipes"]
+        if tool_name == "get_recipe_details" and _has_recipe_details_payload(data):
+            updates["recipe_details"] = data
+        elif _has_recipe_details_payload(data):
+            updates["recipe_details"] = data
         if "waste_items" in data:
             updates["waste_analysis"] = data["waste_items"]
         if "insights" in data:
