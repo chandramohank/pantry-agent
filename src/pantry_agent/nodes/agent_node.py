@@ -19,9 +19,53 @@ from ..config import settings
 from ..memory.short_term import build_memory_summary_context
 from ..prompts.system_prompts import AGENT_SYSTEM_PROMPT
 from ..state import PantryAgentState
-from ..tools.registry import VISION_PRIORITY_TOOLS, get_tools_for_domain
+from ..tools.registry import TOOL_BY_NAME, VISION_PRIORITY_TOOLS, get_tools_for_domain
 
 logger = logging.getLogger(__name__)
+
+
+def _tools_for_intent(intent: str, fallback_tools: list) -> list:
+    """Limit tool availability for deterministic intent-scoped behavior."""
+    if intent == "get_pantry":
+        pantry_tool = TOOL_BY_NAME.get("get_pantry_inventory")
+        return [pantry_tool] if pantry_tool else fallback_tools
+
+    if intent == "get_preferences":
+        return []
+
+    if intent == "get_recipes":
+        preferred_order = [
+            "recommend_recipes",
+            "get_recipe_details",
+            "recipe_search_tool",
+            "get_pantry_inventory",
+        ]
+        selected = [TOOL_BY_NAME[name] for name in preferred_order if name in TOOL_BY_NAME]
+        return selected or fallback_tools
+
+    return fallback_tools
+
+
+def _render_preferences_from_memory(memory: dict[str, Any]) -> str:
+    prefs = memory.get("dietary_preferences") or []
+    allergies = memory.get("allergies") or []
+    favourites = memory.get("favourite_recipes") or []
+    substitutions = memory.get("substitutions") or {}
+
+    if not (prefs or allergies or favourites or substitutions):
+        return "I do not have any saved preferences in memory yet."
+
+    lines: list[str] = ["Here are your saved preferences from memory:"]
+    if prefs:
+        lines.append(f"- Dietary preferences: {', '.join(prefs)}")
+    if allergies:
+        lines.append(f"- Allergies or avoided foods: {', '.join(allergies)}")
+    if favourites:
+        lines.append(f"- Favourite recipes: {', '.join(favourites[:5])}")
+    if substitutions:
+        sample = ", ".join(f"{k} -> {v}" for k, v in list(substitutions.items())[:5])
+        lines.append(f"- Known substitutions: {sample}")
+    return "\n".join(lines)
 
 
 def create_agent_node(tools: list | None = None) -> Callable[[PantryAgentState], dict[str, Any]]:
@@ -50,7 +94,7 @@ def create_agent_node(tools: list | None = None) -> Callable[[PantryAgentState],
         else:
             active_tools = get_tools_for_domain(domain)
 
-        llm_with_tools = base_llm.bind_tools(active_tools)
+        active_tools = _tools_for_intent(intent, active_tools)
 
         # ── Build dynamic system prompt ───────────────────────────────────
         memory_summary = build_memory_summary_context(memory)
@@ -65,7 +109,11 @@ def create_agent_node(tools: list | None = None) -> Callable[[PantryAgentState],
         all_messages = [SystemMessage(content=system_content)] + messages
 
         # ── LLM call ──────────────────────────────────────────────────────
-        response: AIMessage = llm_with_tools.invoke(all_messages)
+        if intent == "get_preferences":
+            response = AIMessage(content=_render_preferences_from_memory(memory))
+        else:
+            llm_with_tools = base_llm.bind_tools(active_tools)
+            response = llm_with_tools.invoke(all_messages)
 
         # ── Execution trace ───────────────────────────────────────────────
         tool_call_names = [tc["name"] for tc in (response.tool_calls or [])]

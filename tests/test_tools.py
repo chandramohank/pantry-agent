@@ -291,9 +291,7 @@ def test_recipe_search_tool_build_odata_filter_exclude_ingredients():
     filters = {"exclude_ingredients": ["tomato", "onion"]}
     result = _build_odata_filter(filters)
 
-    assert "search.in(ingredients," in result
-    assert "'tomato'" in result
-    assert "'onion'" in result
+    assert "not (search.ismatch('tomato', 'ingredients') or search.ismatch('onion', 'ingredients'))" in result
 
 
 def test_recipe_search_tool_build_odata_filter_empty():

@@ -417,9 +417,10 @@ def recommend_recipes(
         search_results = recipe_search_tool.invoke({"query": query, "filters": search_filters or None})
 
         if search_results.get("error"):
+            search_error = search_results.get("message") or search_results.get("error") or "unknown error"
             return {
                 "recipes": [],
-                "message": f"Recipe recommendations unavailable: {search_results.get('error', 'unknown error')}",
+                "message": f"Recipe recommendations unavailable: {search_error}",
             }
 
         # Fetch pantry inventory for post-filtering and coverage analysis
@@ -654,11 +655,18 @@ def _build_odata_filter(filters: dict) -> str:
     if meal_type := filters.get("meal_type"):
         conditions.append(f"meal_type eq '{meal_type}'")
 
-    # Exclude ingredients (search.in function for array field)
+    # Exclude ingredients using fielded full-text match.
+    # This avoids any()/all() syntax so the filter works whether ingredients
+    # is indexed as a string or as a collection.
     if exclude_ingredients := filters.get("exclude_ingredients"):
         if isinstance(exclude_ingredients, list):
-            excluded = ", ".join(f"'{ing}'" for ing in exclude_ingredients)
-            conditions.append(f"search.in(ingredients, {excluded})")
+            terms = [str(ing).strip() for ing in exclude_ingredients if str(ing).strip()]
+            if terms:
+                escaped_terms = [term.replace("'", "''") for term in terms]
+                ingredient_matches = [
+                    f"search.ismatch('" + term + "', 'ingredients')" for term in escaped_terms
+                ]
+                conditions.append(f"not ({' or '.join(ingredient_matches)})")
 
     return " and ".join(conditions)
 
@@ -784,6 +792,7 @@ def recipe_search_tool(query: str, filters: dict | None = None) -> dict[str, Any
                 "total_found": 0,
                 "query": query,
                 "execution_time_ms": None,
+                "message": "Azure Search not configured (missing AZURE_SEARCH_ENDPOINT or AZURE_SEARCH_KEY)",
                 "error": "Azure Search not configured (missing AZURE_SEARCH_ENDPOINT or AZURE_SEARCH_KEY)",
             }
 
@@ -886,5 +895,6 @@ def recipe_search_tool(query: str, filters: dict | None = None) -> dict[str, Any
             "total_found": 0,
             "query": query,
             "execution_time_ms": execution_time_ms,
+            "message": f"Recipe search failed: {str(e)}",
             "error": f"Recipe search failed: {str(e)}",
         }

@@ -56,7 +56,7 @@ def _get_conn() -> sqlite3.Connection:
 def load_user_memory(user_id: str) -> dict[str, Any]:
     """Load the long-term memory record for *user_id*."""
     if settings.memory_backend == "memory":
-        return _IN_MEMORY_STORE.get(user_id, _default_memory())
+        return _normalize_memory_schema(_IN_MEMORY_STORE.get(user_id, _default_memory()))
 
     try:
         conn = _get_conn()
@@ -65,7 +65,7 @@ def load_user_memory(user_id: str) -> dict[str, Any]:
         ).fetchone()
         conn.close()
         if row:
-            return json.loads(row[0])
+            return _normalize_memory_schema(json.loads(row[0]))
         return _default_memory()
     except Exception as exc:
         logger.error("Failed to load memory for %s: %s", user_id, exc)
@@ -107,7 +107,8 @@ def merge_memory_updates(existing: dict[str, Any], updates: dict[str, Any]) -> d
     List fields are unioned (deduplicated). Dict fields are shallow-merged.
     Scalar fields are replaced.
     """
-    result = dict(existing)
+    result = _normalize_memory_schema(existing)
+    updates = _normalize_update_keys(updates)
 
     list_fields = {"dietary_preferences", "allergies", "favourite_recipes", "waste_patterns"}
     dict_fields = {"substitutions"}
@@ -124,6 +125,37 @@ def merge_memory_updates(existing: dict[str, Any], updates: dict[str, Any]) -> d
             result[key] = value
 
     return result
+
+
+def _normalize_update_keys(updates: dict[str, Any]) -> dict[str, Any]:
+    """Map summariser output keys to canonical long-term memory keys."""
+    normalized = dict(updates)
+
+    # Backward-compat with current MEMORY_SUMMARY_PROMPT key names.
+    if "preferences_learned" in normalized and "dietary_preferences" not in normalized:
+        normalized["dietary_preferences"] = normalized.get("preferences_learned", [])
+    if "recipes_mentioned" in normalized and "favourite_recipes" not in normalized:
+        normalized["favourite_recipes"] = normalized.get("recipes_mentioned", [])
+
+    return normalized
+
+
+def _normalize_memory_schema(memory: dict[str, Any]) -> dict[str, Any]:
+    """Ensure loaded memory always exposes canonical keys used by prompts."""
+    normalized = _default_memory()
+    normalized.update(memory or {})
+
+    # Fold legacy/summariser fields into canonical fields so retrieval remains consistent.
+    prefs = list(normalized.get("dietary_preferences", []))
+    prefs += list(normalized.get("preferences_learned", []))
+    normalized["dietary_preferences"] = list(dict.fromkeys(prefs))
+
+    recipes = list(normalized.get("favourite_recipes", []))
+    recipes += list(normalized.get("recipes_mentioned", []))
+    normalized["favourite_recipes"] = list(dict.fromkeys(recipes))
+
+    # Keep auxiliary keys if present for compatibility/debugging.
+    return normalized
 
 
 def _default_memory() -> dict[str, Any]:

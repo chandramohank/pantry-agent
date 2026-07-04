@@ -267,10 +267,29 @@ def test_validate_output_does_not_store_failed_recipe_details():
 
     result = validate_output(state)
 
-    assert "recipe_details" not in result
+    assert result["recipe_details"] == {}
     assert result["validation_errors"] == [
         "get_recipe_details: Recipe details are unavailable for the selected recipe."
     ]
+
+
+def test_validate_output_clears_stale_structured_state_without_tool_messages():
+    from pantry_agent.nodes.validator import validate_output
+
+    state = default_state()
+    state["pantry_items"] = [{"name": "milk"}]
+    state["recipes"] = [{"name": "Omelette"}]
+    state["recipe_details"] = {"recipe": {"name": "Omelette"}}
+    state["messages"] = [
+        HumanMessage(content="show my preferences"),
+        AIMessage(content="Here are your saved preferences from memory."),
+    ]
+
+    result = validate_output(state)
+
+    assert result["pantry_items"] == []
+    assert result["recipes"] == []
+    assert result["recipe_details"] == {}
 
 
 def test_compose_response_summary_message_with_structured_payload():
@@ -353,3 +372,33 @@ def test_compose_response_normalizes_recipe_search_results_into_artifacts():
     assert card["metadata"]["url"] == "https://example.com/tomato-omelette"
     assert card["metadata"]["protein"] == 12.0
     assert card["metadata"]["hybrid_score"] == 0.91
+
+
+def test_compose_response_preferences_are_rendered_as_artifact():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["intent"] = "get_preferences"
+    state["domain"] = "General"
+    state["messages"] = [AIMessage(content="Here are your saved preferences from memory.")]
+    state["memory"] = {
+        "dietary_preferences": ["Vegan", "vegan", "Dairy-free"],
+        "allergies": ["beef"],
+        "favourite_recipes": ["Chickpea curry"],
+        "substitutions": {"milk": "oat milk"},
+    }
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert "preferences" in ui_response["payload"]
+    prefs = ui_response["payload"]["preferences"]
+    assert prefs["dietary_preferences"] == ["Vegan", "Dairy-free"]
+    assert prefs["allergies"] == ["beef"]
+    assert prefs["favourite_recipes"] == ["Chickpea curry"]
+    assert prefs["substitutions"] == {"milk": "oat milk"}
+
+    artifacts = ui_response["artifacts"]
+    assert len(artifacts) == 1
+    assert artifacts[0]["artifact_id"] == "user-preferences"
+    assert artifacts[0]["type"] == "detail_view"

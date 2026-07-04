@@ -37,6 +37,45 @@ _VALID_DOMAINS = {
     "Waste", "Sustainability", "General",
 }
 
+_PANTRY_KEYWORDS = (
+    "pantry", "fridge", "freezer", "inventory", "ingredients i have",
+    "what do i have", "show my items", "show pantry",
+)
+_PREFERENCE_KEYWORDS = (
+    "preference", "preferences", "dietary", "allergy", "allergies",
+    "avoid", "dislike", "intolerance", "restrictions",
+)
+_RECIPE_KEYWORDS = (
+    "recipe", "recipes", "cook", "meal", "recommend", "recommendation",
+    "suggest", "what can i make",
+)
+
+
+def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
+    return any(pattern in text for pattern in patterns)
+
+
+def _apply_intent_overrides(user_input: str, intent: str, domain: str) -> tuple[str, str]:
+    """Apply deterministic overrides for high-signal routing phrases."""
+    text = re.sub(r"\s+", " ", (user_input or "").strip().lower())
+    if not text:
+        return intent, domain
+
+    mentions_pantry = _contains_any(text, _PANTRY_KEYWORDS)
+    mentions_preferences = _contains_any(text, _PREFERENCE_KEYWORDS)
+    mentions_recipes = _contains_any(text, _RECIPE_KEYWORDS)
+
+    if mentions_recipes and (mentions_pantry or mentions_preferences or "based on" in text):
+        return "get_recipes", "Recipes"
+
+    if mentions_preferences and not mentions_recipes and not mentions_pantry:
+        return "get_preferences", "General"
+
+    if mentions_pantry and not mentions_recipes:
+        return "get_pantry", "Pantry"
+
+    return intent, domain
+
 
 def classify_intent(state: PantryAgentState) -> dict[str, Any]:
     """
@@ -111,6 +150,7 @@ def classify_intent(state: PantryAgentState) -> dict[str, Any]:
         uploaded_images = uploaded_images or ["<pending>"]
 
     intent = classification.get("intent", "general_query")
+    intent, domain = _apply_intent_overrides(user_input, intent, domain)
 
     logger.info("Classified: intent=%s, domain=%s, has_image=%s", intent, domain, bool(uploaded_images))
 

@@ -55,6 +55,40 @@ def _has_recipe_details_payload(payload: Any) -> bool:
     )
 
 
+def _dedupe_string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return deduped
+
+
+def _preferences_payload(memory: dict[str, Any]) -> dict[str, Any]:
+    substitutions_raw = memory.get("substitutions", {})
+    substitutions = (
+        {str(k): str(v) for k, v in substitutions_raw.items()}
+        if isinstance(substitutions_raw, dict)
+        else {}
+    )
+    return {
+        "dietary_preferences": _dedupe_string_list(memory.get("dietary_preferences", [])),
+        "allergies": _dedupe_string_list(memory.get("allergies", [])),
+        "favourite_recipes": _dedupe_string_list(memory.get("favourite_recipes", [])),
+        "substitutions": substitutions,
+    }
+
+
 def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback: str) -> str:
     """Build a concise UI summary when structured payload is available."""
     if not payload:
@@ -87,6 +121,15 @@ def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback:
     sustainability = payload.get("sustainability")
     if isinstance(sustainability, dict) and sustainability:
         parts.append("Generated sustainability insights.")
+
+    preferences = payload.get("preferences")
+    if isinstance(preferences, dict):
+        prefs_count = len(preferences.get("dietary_preferences", []))
+        allergy_count = len(preferences.get("allergies", []))
+        parts.append(
+            "Loaded saved preferences from memory"
+            f" ({prefs_count} dietary preference(s), {allergy_count} allergy item(s))."
+        )
 
     if state.get("human_approval_required"):
         parts.append("Approval is required before applying changes.")
@@ -276,6 +319,30 @@ def _approval_artifact(state: PantryAgentState) -> UIArtifact:
     )
 
 
+def _preferences_artifact(preferences: dict[str, Any]) -> UIArtifact:
+    substitutions = preferences.get("substitutions", {})
+    substitution_rows = [
+        {"ingredient": key, "substitute": value}
+        for key, value in substitutions.items()
+    ]
+
+    return UIArtifact(
+        artifact_id="user-preferences",
+        type="detail_view",
+        title="Saved Preferences",
+        description="Preferences loaded from your long-term memory.",
+        data={
+            "dietary_preferences": preferences.get("dietary_preferences", []),
+            "allergies": preferences.get("allergies", []),
+            "favourite_recipes": preferences.get("favourite_recipes", []),
+            "substitutions": substitution_rows,
+        },
+        layout=UILayout(variant="detail", density="comfortable"),
+        accessibility={"role": "region", "aria_label": "Saved dietary preferences"},
+        meta={"domain": "General", "intent": "get_preferences"},
+    )
+
+
 def compose_response(state: PantryAgentState) -> dict[str, Any]:
     """Compose a versioned UI response envelope from current agent state."""
     messages = state.get("messages", [])
@@ -285,6 +352,7 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
 
     artifacts: list[UIArtifact] = []
     actions: list[UIAction] = []
+    intent = state.get("intent", "")
 
     extracted_items = state.get("extracted_items", [])
     if extracted_items:
@@ -301,6 +369,10 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
     pantry_items = state.get("pantry_items", [])
     if pantry_items:
         artifacts.append(_pantry_table_artifact(pantry_items))
+
+    preferences = _preferences_payload(state.get("memory", {})) if intent == "get_preferences" else {}
+    if preferences:
+        artifacts.append(_preferences_artifact(preferences))
 
     if state.get("human_approval_required"):
         artifacts.append(_approval_artifact(state))
@@ -324,6 +396,8 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
         payload["recipe_details"] = state.get("recipe_details", {})
     if pantry_items:
         payload["pantry_items"] = pantry_items
+    if preferences:
+        payload["preferences"] = preferences
     if state.get("waste_analysis"):
         payload["waste_analysis"] = state.get("waste_analysis", [])
     if state.get("sustainability_data"):

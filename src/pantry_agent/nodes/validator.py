@@ -90,7 +90,8 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
 
         # ── Error surfaced by the tool itself ─────────────────────────────
         if data.get("error"):
-            errors.append(f"{tool_name}: {data.get('message', 'Unknown error')}")
+            error_message = data.get("message") or data.get("error") or "Unknown error"
+            errors.append(f"{tool_name}: {error_message}")
             continue
 
         # ── Confidence check (vision and extraction tools) ────────────────
@@ -133,6 +134,12 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
         "human_approval_required": approval_required,
         "approval_reason": approval_reason,
         "tool_outputs": tool_outputs,
+        "extracted_items": [],
+        "pantry_items": [],
+        "recipes": [],
+        "recipe_details": {},
+        "waste_analysis": [],
+        "sustainability_data": {},
         "execution_trace": state.get("execution_trace", [])
         + [
             {
