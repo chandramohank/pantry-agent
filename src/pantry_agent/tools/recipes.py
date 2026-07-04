@@ -11,10 +11,12 @@ import time
 from functools import lru_cache
 from typing import Any
 
+from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.models import QueryType, VectorizedQuery
 from langchain_core.tools import tool
 from openai import AzureOpenAI
+from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from ..api_client import api_get, safe_api_call
@@ -178,10 +180,15 @@ def _build_odata_filter(filters: dict) -> str:
 @lru_cache(maxsize=1)
 def _get_embedding_client() -> AzureOpenAI:
     """Singleton Azure OpenAI client for embeddings."""
+    # azure_endpoint must be the resource base URL (scheme + host only).
+    # settings.azure_openai_endpoint may include an OpenAI-compat path
+    # like /openai/v1 which is only valid for base_url; strip it here.
+    parsed = urlparse(settings.azure_openai_endpoint)
+    resource_endpoint = f"{parsed.scheme}://{parsed.netloc}/"
     return AzureOpenAI(
         api_key=settings.openai_api_key,
         api_version="2024-02-15-preview",
-        azure_endpoint=settings.azure_openai_endpoint,
+        azure_endpoint=resource_endpoint,
     )
 
 
@@ -208,7 +215,7 @@ def _get_search_client() -> SearchClient:
     return SearchClient(
         endpoint=settings.azure_search_endpoint,
         index_name=settings.azure_search_index,
-        credential=settings.azure_search_key,
+        credential=AzureKeyCredential(settings.azure_search_key),
     )
 
 
@@ -325,7 +332,7 @@ def recipe_search_tool(query: str, filters: dict | None = None) -> dict[str, Any
             ],
         }
         if embedding is not None:
-            search_kwargs["vectors"] = [
+            search_kwargs["vector_queries"] = [
                 VectorizedQuery(
                     vector=embedding,
                     k_nearest_neighbors=5,
