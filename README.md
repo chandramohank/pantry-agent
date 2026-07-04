@@ -99,8 +99,19 @@ Response shape:
 
 ```json
 {
+      "schema_version": "1.0",
   "thread_id": "demo-thread",
-  "content": "...final assistant response..."
+      "message": "...final assistant response...",
+      "payload": {},
+      "artifacts": [],
+      "actions": [],
+      "context": {
+            "intent": "get_recipes",
+            "domain": "Recipes"
+      },
+      "trace": [],
+      "approval": null,
+      "errors": []
 }
 ```
 

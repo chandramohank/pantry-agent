@@ -358,6 +358,7 @@ class AgentResponseEnvelope(BaseModel):
     schema_version: str = "1.0"
     thread_id: str
     message: str
+    payload: dict[str, Any] = Field(default_factory=dict)
     artifacts: list[UIArtifact] = Field(default_factory=list)
     actions: list[UIAction] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)

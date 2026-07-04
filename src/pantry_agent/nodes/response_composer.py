@@ -47,6 +47,46 @@ def _last_assistant_text(messages: list[Any]) -> str:
     return ""
 
 
+def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback: str) -> str:
+    """Build a concise UI summary when structured payload is available."""
+    if not payload:
+        return fallback
+
+    parts: list[str] = []
+
+    extracted_items = payload.get("extracted_items")
+    if isinstance(extracted_items, list):
+        parts.append(f"Identified {len(extracted_items)} pantry item(s).")
+
+    recipes = payload.get("recipes")
+    if isinstance(recipes, list):
+        parts.append(f"Prepared {len(recipes)} recipe recommendation(s).")
+
+    pantry_items = payload.get("pantry_items")
+    if isinstance(pantry_items, list):
+        parts.append(f"Loaded {len(pantry_items)} pantry item(s) from inventory.")
+
+    waste_analysis = payload.get("waste_analysis")
+    if isinstance(waste_analysis, list):
+        parts.append(f"Computed waste risk for {len(waste_analysis)} item(s).")
+
+    sustainability = payload.get("sustainability")
+    if isinstance(sustainability, dict) and sustainability:
+        parts.append("Generated sustainability insights.")
+
+    if state.get("human_approval_required"):
+        parts.append("Approval is required before applying changes.")
+
+    errors = state.get("validation_errors", [])
+    if isinstance(errors, list) and errors:
+        parts.append(f"{len(errors)} validation issue(s) detected.")
+
+    if parts:
+        return " ".join(parts)
+
+    return "Structured results are ready in payload."
+
+
 def _selection_list_artifact(items: list[dict[str, Any]]) -> UIArtifact:
     return UIArtifact(
         artifact_id="ingredients-selection",
@@ -216,9 +256,24 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
             )
         )
 
+    payload: dict[str, Any] = {}
+    if extracted_items:
+        payload["extracted_items"] = extracted_items
+    if recipes:
+        payload["recipes"] = recipes
+    if pantry_items:
+        payload["pantry_items"] = pantry_items
+    if state.get("waste_analysis"):
+        payload["waste_analysis"] = state.get("waste_analysis", [])
+    if state.get("sustainability_data"):
+        payload["sustainability"] = state.get("sustainability_data", {})
+    if state.get("tool_outputs"):
+        payload["tool_outputs"] = state.get("tool_outputs", [])
+
     response = AgentResponseEnvelope(
         thread_id="",
-        message=message,
+        message=_summary_message(state, payload, message),
+        payload=payload,
         artifacts=artifacts,
         actions=actions,
         context={

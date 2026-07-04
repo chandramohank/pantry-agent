@@ -207,3 +207,65 @@ def test_memory_summary_prompt_formatting_is_valid():
     rendered = MEMORY_SUMMARY_PROMPT.format(conversation="User: quick vegan dinner")
     assert "\"substitutions\"" in rendered
     assert "<ingredient>" in rendered
+
+
+def test_validate_output_collects_tool_data_after_final_ai():
+    from langchain_core.messages import ToolMessage
+
+    from pantry_agent.nodes.validator import validate_output
+
+    state = default_state()
+    state["messages"] = [
+        HumanMessage(content="What can I cook?"),
+        AIMessage(content="", tool_calls=[{"name": "recommend_recipes", "args": {}, "id": "tc1"}]),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "recipes": [
+                        {
+                            "name": "Spinach Omelette",
+                            "ingredients": [{"name": "eggs", "quantity": 2, "unit": "pieces"}],
+                            "instructions": ["Whisk eggs", "Cook with spinach"],
+                        }
+                    ]
+                }
+            ),
+            tool_call_id="tc1",
+            name="recommend_recipes",
+        ),
+        AIMessage(content="You can make Spinach Omelette. Whisk eggs and cook with spinach."),
+    ]
+
+    result = validate_output(state)
+
+    assert len(result["recipes"]) == 1
+    assert len(result["tool_outputs"]) == 1
+    assert result["tool_outputs"][0]["tool_name"] == "recommend_recipes"
+
+
+def test_compose_response_summary_message_with_structured_payload():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["messages"] = [
+        AIMessage(
+            content=(
+                "Here is the full recipe: Spinach Omelette. Ingredients: eggs, spinach. "
+                "Instructions: whisk eggs, saute spinach, combine and cook."
+            )
+        )
+    ]
+    state["recipes"] = [
+        {
+            "name": "Spinach Omelette",
+            "ingredients": [{"name": "eggs", "quantity": 2, "unit": "pieces"}],
+            "instructions": ["Whisk eggs", "Cook with spinach"],
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "Prepared 1 recipe recommendation(s)."
+    assert len(ui_response["payload"]["recipes"]) == 1
+    assert "Instructions:" not in ui_response["message"]

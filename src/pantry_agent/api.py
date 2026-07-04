@@ -75,11 +75,13 @@ def _run_chat(request: ChatSSERequest) -> dict[str, Any]:
     if isinstance(ui_response, dict) and ui_response:
         ui_response["thread_id"] = request.thread_id
         ui_response["message"] = ui_response.get("message") or message
+        ui_response.setdefault("payload", {})
         return ui_response
 
     envelope = AgentResponseEnvelope(
         thread_id=request.thread_id,
         message=message,
+        payload={},
         context={
             "intent": result.get("intent", ""),
             "domain": result.get("domain", ""),

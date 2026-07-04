@@ -44,17 +44,37 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
     approval_reason = ""
 
     # ── Collect recent tool messages ──────────────────────────────────────
+    # Walk backwards through the latest turn so we can surface structured
+    # tool data even when the agent has already produced a final text answer.
     tool_outputs: list[dict[str, Any]] = []
+    collecting_current_turn = False
     for msg in reversed(messages):
         if isinstance(msg, ToolMessage):
+            collecting_current_turn = True
             try:
                 data = json.loads(msg.content) if isinstance(msg.content, str) else {}
             except json.JSONDecodeError:
                 data = {"raw": msg.content}
             tool_outputs.append({"tool_name": msg.name, "data": data})
-        elif isinstance(msg, AIMessage) and not msg.tool_calls:
-            # Reached the final AI response – stop scanning backwards
+            continue
+
+        if isinstance(msg, AIMessage):
+            if msg.tool_calls:
+                if collecting_current_turn:
+                    continue
+            else:
+                if collecting_current_turn:
+                    break
+                collecting_current_turn = True
+                continue
+
+        role = getattr(msg, "type", None) or getattr(msg, "role", None)
+        if collecting_current_turn and role in {"human", "user"}:
             break
+
+    # Backward scan collected newest tool output first; restore chronological
+    # order so downstream payload rendering is predictable.
+    tool_outputs.reverse()
 
     for output in tool_outputs:
         tool_name: str = output.get("tool_name", "unknown")
@@ -104,6 +124,7 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
         "validation_errors": errors,
         "human_approval_required": approval_required,
         "approval_reason": approval_reason,
+        "tool_outputs": tool_outputs,
         "execution_trace": state.get("execution_trace", [])
         + [
             {
