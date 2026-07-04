@@ -89,6 +89,32 @@ def _preferences_payload(memory: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pantry_items_from_tool_outputs(tool_outputs: Any) -> tuple[list[dict[str, Any]] | None, bool]:
+    """Extract pantry items from get_pantry_inventory tool outputs when available."""
+    if not isinstance(tool_outputs, list):
+        return None, False
+
+    for output in tool_outputs:
+        if not isinstance(output, dict):
+            continue
+        if output.get("tool_name") != "get_pantry_inventory":
+            continue
+
+        data = output.get("data")
+        if isinstance(data, dict):
+            items = data.get("items")
+            if isinstance(items, list):
+                return items, True
+            return [], True
+
+        if isinstance(data, list):
+            return data, True
+
+        return [], True
+
+    return None, False
+
+
 def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback: str) -> str:
     """Build a concise UI summary when structured payload is available."""
     if not payload:
@@ -112,7 +138,20 @@ def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback:
 
     pantry_items = payload.get("pantry_items")
     if isinstance(pantry_items, list):
-        parts.append(f"Loaded {len(pantry_items)} pantry item(s) from inventory.")
+        if pantry_items:
+            parts.append(f"Loaded {len(pantry_items)} pantry item(s) from inventory.")
+        else:
+            parts.append("No pantry items found.")
+    else:
+        tool_outputs = payload.get("tool_outputs")
+        if isinstance(tool_outputs, list):
+            for output in tool_outputs:
+                if output.get("tool_name") != "get_pantry_inventory":
+                    continue
+                data = output.get("data", {})
+                if isinstance(data, dict) and isinstance(data.get("items"), list) and len(data["items"]) == 0:
+                    parts.append("No pantry items found.")
+                    break
 
     waste_analysis = payload.get("waste_analysis")
     if isinstance(waste_analysis, list):
@@ -137,6 +176,30 @@ def _summary_message(state: PantryAgentState, payload: dict[str, Any], fallback:
     errors = state.get("validation_errors", [])
     if isinstance(errors, list) and errors:
         parts.append(f"{len(errors)} validation issue(s) detected.")
+
+    tool_outputs = payload.get("tool_outputs")
+    if isinstance(tool_outputs, list):
+        added_items = 0
+        for output in tool_outputs:
+            if not isinstance(output, dict):
+                continue
+
+            tool_name = output.get("tool_name")
+            data = output.get("data", {})
+            if not isinstance(data, dict) or data.get("error"):
+                continue
+
+            if tool_name == "add_pantry_item":
+                added_items += 1
+                continue
+
+            if tool_name == "extract_and_save_pantry_items":
+                saved_items = data.get("saved_items")
+                if isinstance(saved_items, list):
+                    added_items += len(saved_items)
+
+        if added_items > 0:
+            parts.append("Items added successfully.")
 
     if parts:
         return " ".join(parts)
@@ -353,6 +416,7 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
     artifacts: list[UIArtifact] = []
     actions: list[UIAction] = []
     intent = state.get("intent", "")
+    tool_outputs = state.get("tool_outputs", [])
 
     extracted_items = state.get("extracted_items", [])
     if extracted_items:
@@ -366,8 +430,13 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
     if _has_recipe_details_payload(recipe_details):
         artifacts.append(_recipe_details_artifact(recipe_details))
 
-    pantry_items = state.get("pantry_items", [])
-    if pantry_items:
+    pantry_items_raw = state.get("pantry_items")
+    pantry_items: list[dict[str, Any]] = pantry_items_raw if isinstance(pantry_items_raw, list) else []
+    derived_pantry_items, pantry_lookup_called = _pantry_items_from_tool_outputs(tool_outputs)
+    if derived_pantry_items is not None:
+        pantry_items = derived_pantry_items
+
+    if pantry_items or pantry_lookup_called or intent == "get_pantry":
         artifacts.append(_pantry_table_artifact(pantry_items))
 
     preferences = _preferences_payload(state.get("memory", {})) if intent == "get_preferences" else {}
@@ -394,7 +463,7 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
         payload["recipes"] = recipes
     if _has_recipe_details_payload(state.get("recipe_details")):
         payload["recipe_details"] = state.get("recipe_details", {})
-    if pantry_items:
+    if pantry_items or pantry_lookup_called or intent == "get_pantry":
         payload["pantry_items"] = pantry_items
     if preferences:
         payload["preferences"] = preferences
@@ -402,8 +471,8 @@ def compose_response(state: PantryAgentState) -> dict[str, Any]:
         payload["waste_analysis"] = state.get("waste_analysis", [])
     if state.get("sustainability_data"):
         payload["sustainability"] = state.get("sustainability_data", {})
-    if state.get("tool_outputs"):
-        payload["tool_outputs"] = state.get("tool_outputs", [])
+    if tool_outputs:
+        payload["tool_outputs"] = tool_outputs
 
     response = AgentResponseEnvelope(
         thread_id="",

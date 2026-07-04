@@ -58,6 +58,15 @@ def reset_client() -> None:
     _client = None
 
 
+def _merge_request_headers(headers: dict[str, str] | None = None) -> dict[str, str] | None:
+    if not headers:
+        return None
+
+    merged = dict(get_client().headers)
+    merged.update(headers)
+    return merged
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=8),
@@ -65,9 +74,13 @@ def reset_client() -> None:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+def api_get(
+    path: str,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """GET request to the Pantry API, with automatic retry on transient errors."""
-    response = get_client().get(path, params=params)
+    response = get_client().get(path, params=params, headers=_merge_request_headers(headers))
     response.raise_for_status()
     return response.json()
 
@@ -79,9 +92,13 @@ def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def api_post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def api_post(
+    path: str,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """POST request to the Pantry API, with automatic retry on transient errors."""
-    response = get_client().post(path, json=body or {})
+    response = get_client().post(path, json=body or {}, headers=_merge_request_headers(headers))
     response.raise_for_status()
     return response.json()
 
@@ -93,9 +110,12 @@ def api_post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def api_delete(path: str) -> dict[str, Any]:
+def api_delete(
+    path: str,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """DELETE request to the Pantry API."""
-    response = get_client().delete(path)
+    response = get_client().delete(path, headers=_merge_request_headers(headers))
     response.raise_for_status()
     return response.json()
 

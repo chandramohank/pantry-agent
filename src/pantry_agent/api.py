@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from .agent import run_agent
 from .models.schemas import AgentResponseEnvelope
+from .tools.pantry import reset_pantry_tool_user_id, set_pantry_tool_user_id
 
 app = FastAPI(title="Pantry Agent API", version="0.1.0")
 
@@ -219,6 +220,7 @@ async def _chat_sse_stream(request: ChatSSERequest):
         loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
 
     def produce() -> None:
+        token = set_pantry_tool_user_id(request.user_id)
         try:
             graph_app = get_graph_app()
             if hasattr(graph_app, "stream"):
@@ -233,6 +235,7 @@ async def _chat_sse_stream(request: ChatSSERequest):
         except Exception as exc:  # pragma: no cover - exercised via API tests
             publish("error", exc)
         finally:
+            reset_pantry_tool_user_id(token)
             publish("done", sentinel)
 
     threading.Thread(target=produce, daemon=True).start()

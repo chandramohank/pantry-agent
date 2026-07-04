@@ -13,28 +13,17 @@ Graph topology:
     classify_intent      ← LLM classifies intent + domain; detects images
       │
       ▼
-    agent  ◄─────────────────────────┐
-      │                              │
-      │ tool_calls?                  │
-      ├─── YES ──► tools ────────────┘
-      │
-      └─── NO ──► validate_output
+        agent  ◄─────────────────────────┐
+         │                              │
+         │ tool_calls?                  │
+         ├─── YES ──► tools ────────────┘
+         │
+         └─── NO ──► validate_output
                       │
-                      │ approval_required?
-                      ├─── YES ──► request_approval ──►┐
-                      │                                │
-                      └─── NO ──────────────────────►──┘
-                                                        │
-                                                   update_memory
-                                                        │
-                                                       END
-
-Human-in-the-Loop:
-  The graph is compiled with `interrupt_before=["request_approval"]`.
-  When the node is reached, execution PAUSES. The caller resumes via:
-
-      from langgraph.types import Command
-      app.invoke(Command(resume={"approved": True}), config=config)
+                      ▼
+                  update_memory
+                      │
+                     END
 
 Usage:
 
@@ -65,14 +54,14 @@ from langgraph.prebuilt import ToolNode
 
 from .config import settings
 from .nodes.agent_node import create_agent_node, should_continue
-from .nodes.human_approval import request_approval, route_after_approval
 from .nodes.intent_classifier import classify_intent
 from .nodes.memory_loader import load_memory
 from .nodes.memory_updater import update_memory
 from .nodes.response_composer import compose_response
-from .nodes.validator import needs_approval, validate_output
+from .nodes.validator import validate_output
 from .observability.tracing import configure_logging, log_agent_run
 from .state import PantryAgentState, default_state
+from .tools.pantry import reset_pantry_tool_user_id, set_pantry_tool_user_id
 from .tools.registry import get_all_tools
 
 logger = logging.getLogger(__name__)
@@ -119,7 +108,6 @@ def create_agent(
     builder.add_node("agent", agent_fn)
     builder.add_node("tools", tool_node)
     builder.add_node("validate_output", validate_output)
-    builder.add_node("request_approval", request_approval)
     builder.add_node("update_memory", update_memory)
     builder.add_node("compose_response", compose_response)
 
@@ -141,15 +129,7 @@ def create_agent(
     builder.add_edge("tools", "agent")
 
     # Post-execution path
-    builder.add_conditional_edges(
-        "validate_output",
-        needs_approval,
-        {
-            "request_approval": "request_approval",
-            "update_memory": "update_memory",
-        },
-    )
-    builder.add_edge("request_approval", "update_memory")
+    builder.add_edge("validate_output", "update_memory")
     builder.add_edge("update_memory", "compose_response")
     builder.add_edge("compose_response", END)
 
@@ -157,12 +137,7 @@ def create_agent(
     if checkpointer is None:
         checkpointer = MemorySaver()
 
-    app = builder.compile(
-        checkpointer=checkpointer,
-        # Graph pauses BEFORE this node – human gets to review before any
-        # approval logic inside the node runs.
-        interrupt_before=["request_approval"],
-    )
+    app = builder.compile(checkpointer=checkpointer)
 
     logger.info(
         "Pantry agent compiled: %d tools, model=%s",
@@ -202,7 +177,11 @@ def run_agent(
         initial_state["uploaded_images"] = uploaded_images
 
     start = time.perf_counter()
-    result = app.invoke(initial_state, config=config)
+    token = set_pantry_tool_user_id(user_id)
+    try:
+        result = app.invoke(initial_state, config=config)
+    finally:
+        reset_pantry_tool_user_id(token)
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
     log_agent_run(thread_id, user_message, result, elapsed_ms)

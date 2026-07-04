@@ -41,6 +41,10 @@ _PANTRY_KEYWORDS = (
     "pantry", "fridge", "freezer", "inventory", "ingredients i have",
     "what do i have", "show my items", "show pantry",
 )
+_ADD_ITEM_KEYWORDS = (
+    "add ", "save ", "store ", "put ", "insert ", "log ",
+    "bought ", "purchased ", "just bought", "just got",
+)
 _PREFERENCE_KEYWORDS = (
     "preference", "preferences", "dietary", "allergy", "allergies",
     "avoid", "dislike", "intolerance", "restrictions",
@@ -48,6 +52,12 @@ _PREFERENCE_KEYWORDS = (
 _RECIPE_KEYWORDS = (
     "recipe", "recipes", "cook", "meal", "recommend", "recommendation",
     "suggest", "what can i make",
+)
+_IMAGE_INTENT_PHRASES = (
+    "scan my fridge", "scan the fridge", "scan my pantry", "scan the pantry",
+    "scan my freezer", "scan groceries", "scan receipt", "photo of",
+    "picture of", "image of", "uploaded image", "attached image",
+    "attached photo", "this image", "this photo", "this picture",
 )
 
 
@@ -62,8 +72,14 @@ def _apply_intent_overrides(user_input: str, intent: str, domain: str) -> tuple[
         return intent, domain
 
     mentions_pantry = _contains_any(text, _PANTRY_KEYWORDS)
+    mentions_add = _contains_any(text, _ADD_ITEM_KEYWORDS)
     mentions_preferences = _contains_any(text, _PREFERENCE_KEYWORDS)
     mentions_recipes = _contains_any(text, _RECIPE_KEYWORDS)
+
+    if mentions_add and not mentions_recipes:
+        if any(separator in text for separator in (",", " and ", "\n", ";")):
+            return "add_bulk_items", "Pantry"
+        return "add_item", "Pantry"
 
     if mentions_recipes and (mentions_pantry or mentions_preferences or "based on" in text):
         return "get_recipes", "Recipes"
@@ -112,11 +128,11 @@ def classify_intent(state: PantryAgentState) -> dict[str, Any]:
     has_image_hint = bool(uploaded_images)
 
     # ── Heuristic image keyword detection ────────────────────────────────
+    normalized_input = re.sub(r"\s+", " ", user_input.lower()).strip()
     image_keywords = (
-        "image", "photo", "picture", "scan", "fridge", "shelf", "receipt",
-        "photograph", "snapshot", "pic", "img",
+        "image", "photo", "picture", "photograph", "snapshot", "pic", "img",
     )
-    if any(kw in user_input.lower() for kw in image_keywords):
+    if any(kw in normalized_input for kw in image_keywords) or _contains_any(normalized_input, _IMAGE_INTENT_PHRASES):
         has_image_hint = True
 
     # ── LLM classification ────────────────────────────────────────────────

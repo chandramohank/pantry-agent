@@ -109,22 +109,15 @@ def extract_and_save_pantry_items(text: str) -> dict[str, Any]:
     WHEN TO USE
     -----------
     Use this tool when the user:
-    - Explicitly confirms they want to add items from a text list
     - Says "Add milk, bread, and eggs to my pantry"
-    - Confirms items after a preview extraction
+    - Provides a text list and wants it saved
     - Pastes a shopping list and says "save all of these"
     - Says "Store everything from this grocery list: ..."
 
     WHEN NOT TO USE
     ---------------
-    - NEVER call without explicit user confirmation to save
     - When the user only wants to preview → use extract_pantry_items_from_text
     - When an image is provided → use extract_ingredients_from_image
-
-    HUMAN APPROVAL GATE
-    -------------------
-    Always confirm with the user before calling this tool, especially when
-    the input text contains ≥5 items (bulk import threshold).
 
     RETURNS
     -------

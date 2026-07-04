@@ -32,7 +32,7 @@ class TestValidateOutput:
         assert result["validation_errors"] == []
         assert result["human_approval_required"] is False
 
-    def test_flags_low_confidence(self):
+    def test_low_confidence_does_not_require_approval(self):
         from pantry_agent.nodes.validator import validate_output
         from langchain_core.messages import ToolMessage
 
@@ -48,10 +48,10 @@ class TestValidateOutput:
             tool_msg,
         ]
         result = validate_output(state)
-        assert result["human_approval_required"] is True
-        assert "confidence" in result["approval_reason"].lower()
+        assert result["human_approval_required"] is False
+        assert result["approval_reason"] == ""
 
-    def test_flags_bulk_import(self):
+    def test_bulk_import_does_not_require_approval(self):
         from pantry_agent.nodes.validator import validate_output
         from langchain_core.messages import ToolMessage
 
@@ -68,7 +68,7 @@ class TestValidateOutput:
             tool_msg,
         ]
         result = validate_output(state)
-        assert result["human_approval_required"] is True
+        assert result["human_approval_required"] is False
 
     def test_flags_api_error(self):
         from pantry_agent.nodes.validator import validate_output
@@ -151,12 +151,12 @@ class TestMemory:
 
 # ── Needs-approval routing ────────────────────────────────────────────────────
 
-def test_needs_approval_routing():
+def test_needs_approval_routing_is_disabled():
     from pantry_agent.nodes.validator import needs_approval
 
     state_needs = default_state()
     state_needs["human_approval_required"] = True
-    assert needs_approval(state_needs) == "request_approval"
+    assert needs_approval(state_needs) == "update_memory"
 
     state_skip = default_state()
     state_skip["human_approval_required"] = False
@@ -199,6 +199,29 @@ def test_all_tools_have_descriptions():
     for tool in get_all_tools():
         assert tool.description, f"Tool '{tool.name}' has no description"
         assert len(tool.description) > 50, f"Tool '{tool.name}' description is too short"
+
+
+def test_tools_for_add_item_intent_keeps_write_access():
+    from pantry_agent.nodes.agent_node import _tools_for_intent
+
+    selected = _tools_for_intent("add_item", [])
+    names = [tool.name for tool in selected]
+
+    assert names == ["get_pantry_inventory", "add_pantry_item"]
+
+
+def test_tools_for_add_bulk_items_intent_prefers_bulk_save_tools():
+    from pantry_agent.nodes.agent_node import _tools_for_intent
+
+    selected = _tools_for_intent("add_bulk_items", [])
+    names = [tool.name for tool in selected]
+
+    assert names == [
+        "extract_and_save_pantry_items",
+        "extract_pantry_items_from_text",
+        "get_pantry_inventory",
+        "add_pantry_item",
+    ]
 
 
 def test_memory_summary_prompt_formatting_is_valid():
@@ -402,3 +425,110 @@ def test_compose_response_preferences_are_rendered_as_artifact():
     assert len(artifacts) == 1
     assert artifacts[0]["artifact_id"] == "user-preferences"
     assert artifacts[0]["type"] == "detail_view"
+
+
+def test_compose_response_empty_pantry_message_is_explicit():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["intent"] = "get_pantry"
+    state["domain"] = "Pantry"
+    state["messages"] = [AIMessage(content="")]
+    state["tool_outputs"] = [
+        {
+            "tool_name": "get_pantry_inventory",
+            "data": {"items": [], "total": 0},
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "No pantry items found."
+
+
+def test_compose_response_add_pantry_item_message_is_explicit():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["intent"] = "add_item"
+    state["domain"] = "Pantry"
+    state["messages"] = [AIMessage(content="")]
+    state["tool_outputs"] = [
+        {
+            "tool_name": "add_pantry_item",
+            "data": {
+                "id": "item-1",
+                "name": "milk",
+                "quantity": 1.0,
+                "unit": "litre",
+                "category": "DAIRY",
+            },
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "Items added successfully."
+
+
+def test_compose_response_builds_pantry_artifact_from_tool_outputs():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["intent"] = "get_pantry"
+    state["domain"] = "Pantry"
+    state["messages"] = [AIMessage(content="")]
+    state["pantry_items"] = []
+    state["tool_outputs"] = [
+        {
+            "tool_name": "get_pantry_inventory",
+            "data": {
+                "items": [
+                    {
+                        "id": "item-1",
+                        "name": "milk",
+                        "quantity": 1.0,
+                        "unit": "litre",
+                        "category": "DAIRY",
+                    }
+                ],
+                "total": 1,
+            },
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "Loaded 1 pantry item(s) from inventory."
+    assert "pantry_items" in ui_response["payload"]
+    assert len(ui_response["payload"]["pantry_items"]) == 1
+    assert len(ui_response["artifacts"]) == 1
+    assert ui_response["artifacts"][0]["artifact_id"] == "pantry-inventory"
+
+
+def test_compose_response_empty_pantry_still_has_table_artifact():
+    from pantry_agent.nodes.response_composer import compose_response
+
+    state = default_state()
+    state["intent"] = "get_pantry"
+    state["domain"] = "Pantry"
+    state["messages"] = [AIMessage(content="")]
+    state["pantry_items"] = []
+    state["tool_outputs"] = [
+        {
+            "tool_name": "get_pantry_inventory",
+            "data": {"items": [], "total": 0},
+        }
+    ]
+
+    result = compose_response(state)
+    ui_response = result["ui_response"]
+
+    assert ui_response["message"] == "No pantry items found."
+    assert "pantry_items" in ui_response["payload"]
+    assert ui_response["payload"]["pantry_items"] == []
+    assert len(ui_response["artifacts"]) == 1
+    assert ui_response["artifacts"][0]["artifact_id"] == "pantry-inventory"

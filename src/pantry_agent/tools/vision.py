@@ -116,7 +116,7 @@ def extract_ingredients_from_image(
          "category": "dairy", "expiry_date": "2025-07-10"},
         ...
       ],
-      "confidence": 0.92,          // 0.0–1.0; values < 0.80 trigger human review
+    "confidence": 0.92,          // 0.0–1.0 confidence score
       "image_description": "...",  // brief description of what was seen
       "saved": true,               // whether items were saved to pantry
       "warnings": []               // low-confidence items or unrecognised objects
@@ -124,8 +124,8 @@ def extract_ingredients_from_image(
 
     CONFIDENCE HANDLING
     -------------------
-    - confidence >= 0.80 → auto-saved if auto_save=True
-    - confidence < 0.80  → human approval required before saving
+    - confidence >= 0.80 → generally reliable extraction
+    - confidence < 0.80  → lower-confidence extraction; surface uncertainty in the response
 
     DEPENDENCIES
     ------------

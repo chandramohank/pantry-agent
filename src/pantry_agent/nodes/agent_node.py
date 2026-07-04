@@ -30,6 +30,24 @@ def _tools_for_intent(intent: str, fallback_tools: list) -> list:
         pantry_tool = TOOL_BY_NAME.get("get_pantry_inventory")
         return [pantry_tool] if pantry_tool else fallback_tools
 
+    if intent == "add_item":
+        preferred_order = [
+            "get_pantry_inventory",
+            "add_pantry_item",
+        ]
+        selected = [TOOL_BY_NAME[name] for name in preferred_order if name in TOOL_BY_NAME]
+        return selected or fallback_tools
+
+    if intent == "add_bulk_items":
+        preferred_order = [
+            "extract_and_save_pantry_items",
+            "extract_pantry_items_from_text",
+            "get_pantry_inventory",
+            "add_pantry_item",
+        ]
+        selected = [TOOL_BY_NAME[name] for name in preferred_order if name in TOOL_BY_NAME]
+        return selected or fallback_tools
+
     if intent == "get_preferences":
         return []
 

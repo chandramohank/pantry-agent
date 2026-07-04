@@ -1,11 +1,8 @@
 """
 Output Validator Node
 =====================
-Examines the most recent tool output(s) in agent messages and decides:
-1. Whether the data is valid and trustworthy
-2. Whether human approval is required before proceeding
-
-Confidence thresholds and bulk thresholds come from application settings.
+Examines the most recent tool output(s) in agent messages and surfaces
+errors plus structured payloads for the UI.
 """
 from __future__ import annotations
 
@@ -21,15 +18,6 @@ from ..state import PantryAgentState
 logger = logging.getLogger(__name__)
 
 # ── Heuristic thresholds ──────────────────────────────────────────────────────
-_CONFIDENCE_THRESHOLD = settings.vision_confidence_threshold
-_BULK_THRESHOLD = settings.human_approval_required_for_bulk
-
-# Tool names that touch persistent state and warrant stricter validation
-_WRITE_TOOLS = {
-    "add_pantry_item",
-    "extract_and_save_pantry_items",
-    "extract_ingredients_from_image",
-}
 
 
 def _has_recipe_details_payload(data: Any) -> bool:
@@ -42,14 +30,12 @@ def _has_recipe_details_payload(data: Any) -> bool:
 
 def validate_output(state: PantryAgentState) -> dict[str, Any]:
     """
-    Validate recent tool outputs and flag high-risk operations for human review.
+    Validate recent tool outputs and surface non-blocking issues.
 
     Sets: validation_errors, human_approval_required, approval_reason.
     """
     messages = state.get("messages", [])
     errors: list[str] = []
-    approval_required = False
-    approval_reason = ""
 
     # ── Collect recent tool messages ──────────────────────────────────────
     # Walk backwards through the latest turn so we can surface structured
@@ -94,30 +80,7 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
             errors.append(f"{tool_name}: {error_message}")
             continue
 
-        # ── Confidence check (vision and extraction tools) ────────────────
-        confidence: float | None = data.get("confidence")
-        if confidence is not None and confidence < _CONFIDENCE_THRESHOLD:
-            approval_required = True
-            approval_reason = (
-                f"Vision/extraction confidence {confidence:.0%} is below "
-                f"the {_CONFIDENCE_THRESHOLD:.0%} threshold. "
-                "Please review the extracted items before they are saved."
-            )
-            logger.warning(
-                "Low confidence extraction from %s: %.2f < %.2f",
-                tool_name,
-                confidence,
-                _CONFIDENCE_THRESHOLD,
-            )
-
-        # ── Bulk import check ─────────────────────────────────────────────
         items: list = data.get("extracted_items", data.get("saved_items", []))
-        if tool_name in _WRITE_TOOLS and len(items) >= _BULK_THRESHOLD:
-            approval_required = True
-            approval_reason = (
-                f"Bulk operation: {len(items)} items are about to be saved. "
-                "Please confirm before proceeding."
-            )
 
         # ── Quantity sanity check ─────────────────────────────────────────
         for item in items:
@@ -131,8 +94,8 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
     # Carry forward existing pantry / recipe data if populated by tools
     updates: dict[str, Any] = {
         "validation_errors": errors,
-        "human_approval_required": approval_required,
-        "approval_reason": approval_reason,
+        "human_approval_required": False,
+        "approval_reason": "",
         "tool_outputs": tool_outputs,
         "extracted_items": [],
         "pantry_items": [],
@@ -145,7 +108,7 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
             {
                 "node": "validate_output",
                 "errors": errors,
-                "approval_required": approval_required,
+                "approval_required": False,
             }
         ],
     }
@@ -177,5 +140,5 @@ def validate_output(state: PantryAgentState) -> dict[str, Any]:
 
 
 def needs_approval(state: PantryAgentState) -> str:
-    """Conditional edge: route to 'request_approval' or 'update_memory'."""
-    return "request_approval" if state.get("human_approval_required") else "update_memory"
+    """Approval gates are disabled; continue to memory update."""
+    return "update_memory"

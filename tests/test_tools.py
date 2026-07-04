@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -60,22 +60,101 @@ def _mock_api_response(data: dict[str, Any]) -> Any:
 
 
 def test_get_pantry_inventory_calls_api(sample_pantry_items):
-    from pantry_agent.tools.pantry import get_pantry_inventory
+    from pantry_agent.tools.pantry import get_pantry_inventory, reset_pantry_tool_user_id, set_pantry_tool_user_id
 
     mock_response = {"items": sample_pantry_items, "total": len(sample_pantry_items)}
-    with patch("pantry_agent.tools.pantry.safe_api_call", return_value=mock_response):
+    token = set_pantry_tool_user_id("user-123")
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value=mock_response) as mock_safe_api_call:
         result = get_pantry_inventory.invoke({})
+
+    reset_pantry_tool_user_id(token)
+
+    mock_safe_api_call.assert_called_once_with(
+        ANY,
+        "/api/pantry",
+        None,
+        headers={"X-user_id": "user-123", "USERNAME": "user-123"},
+    )
     assert result["total"] == len(sample_pantry_items)
     assert len(result["items"]) == len(sample_pantry_items)
 
 
 def test_add_pantry_item_calls_api():
-    from pantry_agent.tools.pantry import add_pantry_item
+    from pantry_agent.tools.pantry import add_pantry_item, reset_pantry_tool_user_id, set_pantry_tool_user_id
 
     mock_response = {"id": "new-1", "name": "butter", "quantity": 250.0, "unit": "g"}
-    with patch("pantry_agent.tools.pantry.safe_api_call", return_value=mock_response):
+    token = set_pantry_tool_user_id("user-456")
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value=mock_response) as mock_safe_api_call:
         result = add_pantry_item.invoke({"name": "butter", "quantity": 250.0, "unit": "g"})
+
+    reset_pantry_tool_user_id(token)
+
+    mock_safe_api_call.assert_called_once_with(
+        ANY,
+        "/api/pantry",
+        {
+            "name": "butter",
+            "itemName": "butter",
+            "quantity": 250.0,
+            "unit": "g",
+            "category": "DAIRY",
+        },
+        headers={"X-user_id": "user-456", "USERNAME": "user-456"},
+    )
     assert result["name"] == "butter"
+
+
+def test_add_pantry_item_normalizes_explicit_category():
+    from pantry_agent.tools.pantry import add_pantry_item, reset_pantry_tool_user_id, set_pantry_tool_user_id
+
+    token = set_pantry_tool_user_id("user-999")
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value={"id": "new-2", "name": "milk"}) as mock_safe_api_call:
+        add_pantry_item.invoke({"name": "milk", "quantity": 1.0, "unit": "litre", "category": "dairy"})
+
+    reset_pantry_tool_user_id(token)
+
+    mock_safe_api_call.assert_called_once_with(
+        ANY,
+        "/api/pantry",
+        {
+            "name": "milk",
+            "itemName": "milk",
+            "quantity": 1.0,
+            "unit": "litre",
+            "category": "DAIRY",
+        },
+        headers={"X-user_id": "user-999", "USERNAME": "user-999"},
+    )
+
+
+def test_get_pantry_inventory_normalizes_category_filter():
+    from pantry_agent.tools.pantry import get_pantry_inventory, reset_pantry_tool_user_id, set_pantry_tool_user_id
+
+    token = set_pantry_tool_user_id("user-321")
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value={"items": [], "total": 0}) as mock_safe_api_call:
+        get_pantry_inventory.invoke({"category": "dairy"})
+
+    reset_pantry_tool_user_id(token)
+
+    mock_safe_api_call.assert_called_once_with(
+        ANY,
+        "/api/pantry",
+        {"category": "DAIRY"},
+        headers={"X-user_id": "user-321", "USERNAME": "user-321"},
+    )
+
+
+def test_get_pantry_inventory_returns_api_error_without_normalizing():
+    from pantry_agent.tools.pantry import get_pantry_inventory, reset_pantry_tool_user_id, set_pantry_tool_user_id
+
+    api_error = {"error": True, "status_code": 400, "message": "USERNAME is required"}
+    token = set_pantry_tool_user_id("user-789")
+    with patch("pantry_agent.tools.pantry.safe_api_call", return_value=api_error):
+        result = get_pantry_inventory.invoke({})
+
+    reset_pantry_tool_user_id(token)
+
+    assert result == api_error
 
 
 def test_extract_pantry_items_from_text():
