@@ -7,6 +7,7 @@ techniques, and real-time cooking guidance.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from langchain_core.tools import tool
@@ -25,6 +26,13 @@ class CookingCopilotInput(BaseModel):
             "The cooking question or request. Be specific for best results. "
             "E.g. 'How long should I bake lasagna at 180°C?' or "
             "'What can I substitute for butter in chocolate cake?'"
+        ),
+    )
+    recipe_name: str | None = Field(
+        default=None,
+        description=(
+            "Recipe name the question refers to. Use when asking for steps, timings, "
+            "or substitutions for a specific dish."
         ),
     )
     context: str | None = Field(
@@ -46,6 +54,7 @@ class CookingCopilotInput(BaseModel):
 @tool(args_schema=CookingCopilotInput)
 def cooking_copilot(
     question: str,
+    recipe_name: str | None = None,
     context: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
@@ -97,13 +106,30 @@ def cooking_copilot(
     Pass conversation_history to maintain cooking session continuity.
     The context field is especially useful for referencing a specific recipe.
     """
+    resolved_recipe_name = (recipe_name or "").strip()
+    if not resolved_recipe_name and context:
+        # Common pattern: "recipe name: X" inside context text.
+        match = re.search(r"recipe\s*name\s*:\s*([^\n,.;]+)", context, flags=re.IGNORECASE)
+        if match:
+            resolved_recipe_name = match.group(1).strip()
+    if not resolved_recipe_name:
+        resolved_recipe_name = "general"
+
     payload: dict[str, Any] = {
         "question": question,
+        "recipeName": resolved_recipe_name,
         "conversation_history": conversation_history or [],
     }
     if context:
         payload["context"] = context
 
     result = safe_api_call(api_post, "/api/ai/cooking-copilot", payload)
+    if result.get("error"):
+        logger.warning("Cooking copilot API failed for recipeName=%r", resolved_recipe_name)
+        return {
+            "error": True,
+            "message": "Cooking copilot is temporarily unavailable. Please try again.",
+            "details": result.get("message"),
+        }
     logger.info("Cooking copilot answered: %s", question[:80])
     return result

@@ -4,7 +4,6 @@ Memory Updater Node
 Last node before END. Extracts learnable facts from the current turn
 and merges them into the user's long-term memory store.
 """
-from __future__ import annotations
 
 import json
 import logging
@@ -73,9 +72,12 @@ def update_memory(
             [SystemMessage(content=prompt), HumanMessage(content="Summarise now.")]
         )
         raw = response.content if isinstance(response.content, str) else "{}"
-        # Strip markdown fences
-        raw = raw.strip().strip("`").replace("json\n", "").replace("```", "")
-        delta: dict[str, Any] = json.loads(raw)
+        # Parse first JSON object, tolerating fenced or prefixed/suffixed text.
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            raise ValueError("Summariser did not return JSON")
+        delta: dict[str, Any] = json.loads(raw[start : end + 1])
     except Exception as exc:
         logger.warning("Memory summarisation failed: %s – skipping update", exc)
         return {

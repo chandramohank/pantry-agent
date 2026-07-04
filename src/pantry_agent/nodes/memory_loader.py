@@ -4,7 +4,6 @@ Memory Loader Node
 First node in the graph. Loads long-term user memory so all subsequent
 nodes can reference dietary preferences, past interactions, etc.
 """
-from __future__ import annotations
 
 import logging
 from typing import Any

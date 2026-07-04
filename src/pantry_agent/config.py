@@ -34,6 +34,28 @@ class Settings(BaseSettings):
         default="https://intelligentpantry-ai-foundry.services.ai.azure.com/api/projects/IntelligentPantry-Scan",
         description="Azure AI Foundry project endpoint used for metadata/trace context",
     )
+    azure_openai_embedding_deployment: str = Field(
+        default="text-embedding-ada-002",
+        description="Azure OpenAI embedding model deployment name",
+    )
+
+    # ── Azure AI Search ──────────────────────────────────────────────────────
+    azure_search_endpoint: str = Field(
+        default="",
+        description="Azure Search service endpoint (e.g., https://myservice.search.windows.net)",
+    )
+    azure_search_key: str = Field(
+        default="",
+        description="Azure Search admin key for authentication",
+    )
+    azure_search_index: str = Field(
+        default="recipes-index",
+        description="Azure Search index name for recipes",
+    )
+    azure_search_semantic_config: str = Field(
+        default="recipe-semantic-config",
+        description="Semantic ranking configuration name in Azure Search index",
+    )
 
     # ── Pantry REST API ──────────────────────────────────────────────────────
     pantry_api_base_url: str = Field(default="http://localhost:8000")

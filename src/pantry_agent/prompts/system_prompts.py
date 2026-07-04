@@ -133,7 +133,7 @@ Return a JSON object:
    "pantry_changes": ["<item added/removed>", ...],
    "preferences_learned": ["<preference>", ...],
    "recipes_mentioned": ["<recipe name>", ...],
-   "substitutions": {"<ingredient>": "<substitute>"},
+   "substitutions": {{"<ingredient>": "<substitute>"}},
    "waste_patterns": ["<pattern>", ...],
    "summary": "<2–3 sentence overview>"
 }}

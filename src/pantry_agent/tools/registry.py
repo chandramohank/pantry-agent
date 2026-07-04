@@ -12,7 +12,7 @@ from .ai_extract import extract_and_save_pantry_items, extract_pantry_items_from
 from .cooking import cooking_copilot
 from .diet import create_diet_plan
 from .pantry import add_pantry_item, get_pantry_inventory
-from .recipes import recommend_recipes
+from .recipes import recommend_recipes, recipe_search_tool
 from .sustainability import sustainability_insights
 from .vision import ask_about_uploaded_image, extract_ingredients_from_image
 from .waste import analyze_food_waste, recommend_waste_reduction, top_risk_items, waste_dashboard
@@ -33,6 +33,7 @@ DOMAIN_TOOLS: dict[str, list[BaseTool]] = {
     ],
     "Recipes": [
         recommend_recipes,
+        recipe_search_tool,
         get_pantry_inventory,
     ],
     "Diet": [
@@ -59,6 +60,7 @@ DOMAIN_TOOLS: dict[str, list[BaseTool]] = {
         # All tools available for unclassified / multi-domain queries.
         get_pantry_inventory,
         recommend_recipes,
+        recipe_search_tool,
         cooking_copilot,
         analyze_food_waste,
         recommend_waste_reduction,

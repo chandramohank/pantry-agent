@@ -206,6 +206,37 @@ class RecipeRecommendationResponse(BaseModel):
     message: str | None = None
 
 
+class RecipeSearchResult(BaseModel):
+    """Single recipe result from hybrid search."""
+    title: str
+    url: str
+    image: str | None = None
+    total_time: int | None = None  # minutes
+    calories: float | None = None
+    protein: float | None = None
+    hybrid_score: float = Field(..., ge=0.0, le=1.0, description="Blended BM25 + semantic score")
+
+
+class RecipeSearchInput(BaseModel):
+    """Input schema for recipe_search_tool."""
+    query: str = Field(..., description="Natural language recipe search query (e.g., 'hearty beef stew for winter')")
+    filters: dict | None = Field(
+        default=None,
+        description="Optional filters dict. Keys: max_time (int), min_protein (float), max_calories (float), "
+                    "max_sodium (float), exclude_ingredients (list[str]), author (str), "
+                    "max_fat (float), max_carbohydrate (float), max_cholesterol (float), "
+                    "min_fiber (float), max_sugar (float)",
+    )
+
+
+class RecipeSearchResponse(BaseModel):
+    """Response from recipe_search_tool."""
+    recipes: list[RecipeSearchResult]
+    total_found: int | None = None
+    query: str
+    execution_time_ms: float | None = None
+
+
 # ── Waste analysis ────────────────────────────────────────────────────────────
 
 class WasteItem(BaseModel):

@@ -199,3 +199,11 @@ def test_all_tools_have_descriptions():
     for tool in get_all_tools():
         assert tool.description, f"Tool '{tool.name}' has no description"
         assert len(tool.description) > 50, f"Tool '{tool.name}' description is too short"
+
+
+def test_memory_summary_prompt_formatting_is_valid():
+    from pantry_agent.prompts.system_prompts import MEMORY_SUMMARY_PROMPT
+
+    rendered = MEMORY_SUMMARY_PROMPT.format(conversation="User: quick vegan dinner")
+    assert "\"substitutions\"" in rendered
+    assert "<ingredient>" in rendered

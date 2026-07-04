@@ -12,3 +12,4 @@ langsmith>=0.1.99
 python-dotenv>=1.0
 typing-extensions>=4.9
 aiosqlite>=0.20
+azure-search-documents>=11.4.0
